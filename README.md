@@ -87,13 +87,13 @@ Content-Type: application/json
   "projectId": "uuid-from-snapshot",
   "title": "My task",
   "provider": "codex",
-  "model": "o3",
+  "model": "gpt-5.4",
   "runtimeMode": "full-access",
   "interactionMode": "default"
 }
 ```
 
-Only `projectId` is required. Defaults: `provider=codex`, `model=o3`, `runtimeMode=full-access`, `interactionMode=default`, `title="API Thread"`.
+Only `projectId` is required. Defaults: `provider=codex`, `model=gpt-5.4`, `runtimeMode=full-access`, `interactionMode=default`, `title="API Thread"`.
 
 ```json
 { "threadId": "generated-uuid" }

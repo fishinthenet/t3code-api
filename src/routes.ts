@@ -74,7 +74,7 @@ export function createRoutes({ ws, events }: Deps) {
         title: body.title ?? "API Thread",
         modelSelection: {
           provider: body.provider ?? "codex",
-          model: body.model ?? "o3",
+          model: body.model ?? "gpt-5.4",
         },
         runtimeMode: body.runtimeMode ?? "full-access",
         interactionMode: body.interactionMode ?? "default",
@@ -130,7 +130,7 @@ export function createRoutes({ ws, events }: Deps) {
           ? {
               modelSelection: {
                 provider: body.provider ?? "codex",
-                model: body.model ?? "o3",
+                model: body.model ?? "gpt-5.4",
               },
             }
           : {}),

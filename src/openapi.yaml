@@ -297,8 +297,8 @@ components:
           default: codex
         model:
           type: string
-          default: o3
-          description: "Model identifier (e.g. `o3`, `gpt-5.4`, `claude-sonnet-4-6`)"
+          default: gpt-5.4
+          description: "Model identifier (e.g. `gpt-5.4`, `claude-opus-4-6`, `claude-sonnet-4-6`)"
         runtimeMode:
           $ref: "#/components/schemas/RuntimeMode"
         interactionMode:
