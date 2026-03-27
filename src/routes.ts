@@ -6,6 +6,20 @@ import { Hono } from "hono";
 import type { T3WebSocketClient } from "./ws-client";
 import type { EventBuffer, DomainEvent } from "./event-buffer";
 
+const SWAGGER_UI_HTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>t3code-api</title>
+  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css"/>
+</head>
+<body>
+  <div id="swagger-ui"></div>
+  <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+  <script>SwaggerUIBundle({ url: "/openapi.yaml", dom_id: "#swagger-ui" })</script>
+</body>
+</html>`;
+
 interface Deps {
   ws: T3WebSocketClient;
   events: EventBuffer;
@@ -13,6 +27,15 @@ interface Deps {
 
 export function createRoutes({ ws, events }: Deps) {
   const app = new Hono();
+
+  // ── Docs ──────────────────────────────────────────────────────────
+
+  app.get("/docs", (c) => c.html(SWAGGER_UI_HTML));
+
+  app.get("/openapi.yaml", async (c) => {
+    const spec = await Bun.file(new URL("openapi.yaml", import.meta.url)).text();
+    return c.text(spec, 200, { "Content-Type": "text/yaml" });
+  });
 
   // ── Health ──────────────────────────────────────────────────────────
 

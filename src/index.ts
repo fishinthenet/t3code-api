@@ -44,8 +44,12 @@ const app = createRoutes({ ws, events });
 serve({
   port: PORT,
   fetch(req) {
-    // Token auth middleware
-    if (API_TOKEN) {
+    const url = new URL(req.url);
+
+    // Skip auth for docs endpoints
+    const isDocsRoute = url.pathname === "/docs" || url.pathname === "/openapi.yaml";
+
+    if (API_TOKEN && !isDocsRoute) {
       const auth = req.headers.get("Authorization");
       if (auth !== `Bearer ${API_TOKEN}`) {
         return new Response(JSON.stringify({ error: "Unauthorized" }), {
@@ -61,5 +65,6 @@ serve({
 
 console.log(`[t3code-api] REST bridge listening on http://localhost:${PORT}`);
 console.log(`[t3code-api] Upstream: ${T3_WS_URL}`);
+console.log(`[t3code-api] Docs: http://localhost:${PORT}/docs`);
 if (API_TOKEN) console.log(`[t3code-api] Auth: Bearer token required`);
 else console.log(`[t3code-api] Auth: disabled (set T3API_TOKEN to enable)`);

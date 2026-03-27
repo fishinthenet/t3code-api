@@ -1,0 +1,388 @@
+openapi: 3.1.0
+info:
+  title: t3code-api
+  description: REST bridge for T3 Code — control coding agent sessions over plain HTTP.
+  version: 0.1.0
+
+servers:
+  - url: http://localhost:4774
+    description: Local bridge (default port)
+
+security:
+  - BearerAuth: []
+
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      summary: Bridge health check
+      tags: [System]
+      security: []
+      responses:
+        "200":
+          description: Bridge status
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, connected, lastSequence]
+                properties:
+                  ok:
+                    type: boolean
+                  connected:
+                    type: boolean
+                    description: Whether the bridge has an active WebSocket to T3 Code
+                  lastSequence:
+                    type: integer
+                    description: Highest observed event sequence number
+
+  /snapshot:
+    get:
+      operationId: getSnapshot
+      summary: Full orchestration state
+      description: Pass-through to T3 Code's `orchestration.getSnapshot`. Returns all projects, threads, messages, and sessions.
+      tags: [System]
+      responses:
+        "200":
+          description: Orchestration snapshot
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Full T3 Code orchestration read model (shape varies by server version)
+
+  /threads:
+    post:
+      operationId: createThread
+      summary: Create a new thread
+      tags: [Threads]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateThreadRequest"
+      responses:
+        "201":
+          description: Thread created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [threadId]
+                properties:
+                  threadId:
+                    type: string
+                    format: uuid
+
+  /threads/{threadId}:
+    delete:
+      operationId: deleteThread
+      summary: Delete a thread
+      tags: [Threads]
+      parameters:
+        - $ref: "#/components/parameters/ThreadId"
+      responses:
+        "200":
+          description: Thread deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted:
+                    type: boolean
+
+  /threads/{threadId}/messages:
+    post:
+      operationId: sendMessage
+      summary: Send a message and start a turn
+      description: Sends a user message to the thread, which starts an agent turn. Poll `GET /threads/{threadId}/messages` or `/threads/{threadId}/status` to track progress.
+      tags: [Messages]
+      parameters:
+        - $ref: "#/components/parameters/ThreadId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendMessageRequest"
+      responses:
+        "201":
+          description: Message sent, turn started
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [messageId, commandId]
+                properties:
+                  messageId:
+                    type: string
+                    format: uuid
+                  commandId:
+                    type: string
+                    format: uuid
+
+    get:
+      operationId: getMessages
+      summary: Read thread messages
+      description: Returns user and assistant messages from buffered events. Use `lastSequence` as `after` in the next poll to get only new messages.
+      tags: [Messages]
+      parameters:
+        - $ref: "#/components/parameters/ThreadId"
+        - name: after
+          in: query
+          schema:
+            type: integer
+            default: 0
+          description: Only return messages after this event sequence number
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+          description: Max messages to return
+      responses:
+        "200":
+          description: Thread messages
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessagesResponse"
+
+  /threads/{threadId}/events:
+    get:
+      operationId: getEvents
+      summary: Read raw orchestration events
+      description: Returns raw domain events for a thread. Useful for detailed tracking (approvals, activity logs, session changes).
+      tags: [Events]
+      parameters:
+        - $ref: "#/components/parameters/ThreadId"
+        - name: after
+          in: query
+          schema:
+            type: integer
+            default: 0
+          description: Only return events after this sequence number
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+          description: Max events to return
+        - name: types
+          in: query
+          schema:
+            type: string
+          description: "Comma-separated event types to filter (e.g. `thread.message-sent,thread.session-set`)"
+      responses:
+        "200":
+          description: Thread events
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [events, lastSequence]
+                properties:
+                  events:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/DomainEvent"
+                  lastSequence:
+                    type: integer
+
+  /threads/{threadId}/status:
+    get:
+      operationId: getThreadStatus
+      summary: Get thread session status
+      tags: [Threads]
+      parameters:
+        - $ref: "#/components/parameters/ThreadId"
+      responses:
+        "200":
+          description: Thread status
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [threadId, status]
+                properties:
+                  threadId:
+                    type: string
+                  status:
+                    type: string
+                    nullable: true
+                    enum: [idle, starting, running, ready, interrupted, stopped, error, null]
+                    description: "Current session status, or null if no session events observed"
+
+  /threads/{threadId}/interrupt:
+    post:
+      operationId: interruptThread
+      summary: Interrupt the current turn
+      tags: [Threads]
+      parameters:
+        - $ref: "#/components/parameters/ThreadId"
+      responses:
+        "200":
+          description: Turn interrupted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  interrupted:
+                    type: boolean
+
+  /threads/{threadId}/diff:
+    get:
+      operationId: getThreadDiff
+      summary: Get file changes diff
+      description: "Without `to`: returns full thread diff. With `from` and `to`: returns diff between those turn counts."
+      tags: [Threads]
+      parameters:
+        - $ref: "#/components/parameters/ThreadId"
+        - name: from
+          in: query
+          schema:
+            type: integer
+            default: 0
+          description: Starting turn count
+        - name: to
+          in: query
+          schema:
+            type: integer
+            default: 0
+          description: Ending turn count (0 = full thread diff)
+      responses:
+        "200":
+          description: Diff result
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Diff payload from T3 Code
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: Set via `T3API_TOKEN` env var. Optional for local use.
+
+  parameters:
+    ThreadId:
+      name: threadId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: Thread identifier
+
+  schemas:
+    CreateThreadRequest:
+      type: object
+      required: [projectId]
+      properties:
+        projectId:
+          type: string
+          format: uuid
+          description: "Project to create the thread in (get from `GET /snapshot`)"
+        title:
+          type: string
+          default: API Thread
+        provider:
+          type: string
+          enum: [codex, claudeAgent]
+          default: codex
+        model:
+          type: string
+          default: o3
+          description: "Model identifier (e.g. `o3`, `gpt-5.4`, `claude-sonnet-4-6`)"
+        runtimeMode:
+          $ref: "#/components/schemas/RuntimeMode"
+        interactionMode:
+          $ref: "#/components/schemas/InteractionMode"
+
+    SendMessageRequest:
+      type: object
+      required: [text]
+      properties:
+        text:
+          type: string
+          description: User message text
+        provider:
+          type: string
+          enum: [codex, claudeAgent]
+          description: Override provider for this turn
+        model:
+          type: string
+          description: Override model for this turn
+        runtimeMode:
+          $ref: "#/components/schemas/RuntimeMode"
+        interactionMode:
+          $ref: "#/components/schemas/InteractionMode"
+
+    RuntimeMode:
+      type: string
+      enum: [approval-required, full-access]
+      default: full-access
+      description: "`approval-required` = agent asks before executing tools; `full-access` = agent runs freely"
+
+    InteractionMode:
+      type: string
+      enum: [default, plan]
+      default: default
+      description: "`plan` = agent produces a plan first instead of executing immediately"
+
+    MessagesResponse:
+      type: object
+      required: [messages, lastSequence]
+      properties:
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/Message"
+        lastSequence:
+          type: integer
+          description: Use as `after` param in next poll
+
+    Message:
+      type: object
+      required: [sequence, messageId, role, text, createdAt]
+      properties:
+        sequence:
+          type: integer
+        messageId:
+          type: string
+        role:
+          type: string
+          enum: [user, assistant, system]
+        text:
+          type: string
+        turnId:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+
+    DomainEvent:
+      type: object
+      required: [sequence, eventId, type, aggregateId, occurredAt, payload]
+      properties:
+        sequence:
+          type: integer
+        eventId:
+          type: string
+        type:
+          type: string
+          description: "Event type (e.g. `thread.message-sent`, `thread.session-set`, `thread.turn-diff-completed`)"
+        aggregateId:
+          type: string
+        occurredAt:
+          type: string
+          format: date-time
+        payload:
+          type: object
+          description: Event-specific payload (shape varies by event type)
