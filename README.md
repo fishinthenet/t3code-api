@@ -49,6 +49,12 @@ When `T3API_TOKEN` is set, all requests require a `Authorization: Bearer <token>
 
 Note: this is the bridge's own auth. It's independent of T3 Code server's `--auth-token` — if T3 Code itself requires a token, set it in the `T3API_WS_URL` query string: `ws://localhost:3773?token=t3secret`.
 
+## API docs (Swagger UI)
+
+Interactive API docs are available at `http://localhost:4774/docs` when the bridge is running. The OpenAPI spec is served at `/openapi.yaml`.
+
+Both endpoints are exempt from bearer auth — docs are always accessible.
+
 ## API reference
 
 ### Health
@@ -227,5 +233,6 @@ curl "http://localhost:4774/threads/$THREAD/diff"
 | `src/ws-client.ts` | WebSocket client with auto-reconnect and request/response matching |
 | `src/event-buffer.ts` | Per-thread circular buffer for orchestration domain events |
 | `src/routes.ts` | Hono REST routes — translates HTTP to WS commands and buffer reads |
+| `src/openapi.yaml` | OpenAPI 3.1 spec — served at `/openapi.yaml`, powers Swagger UI at `/docs` |
 
 The bridge is stateless except for the event buffer (in-memory, lost on restart). T3 Code server is the source of truth — use `GET /snapshot` to rebuild state after a bridge restart.

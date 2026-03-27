@@ -20,7 +20,8 @@ src/
 ├── index.ts          # Entry point, config from env vars, HTTP server setup
 ├── ws-client.ts      # Persistent WebSocket client to T3 Code (auto-reconnect, request/response matching)
 ├── event-buffer.ts   # Per-thread circular event buffer (orchestration.domainEvent)
-└── routes.ts         # REST endpoints (Hono app) — translates HTTP ↔ WS protocol
+├── routes.ts         # REST endpoints (Hono app) — translates HTTP ↔ WS protocol
+└── openapi.yaml      # OpenAPI 3.1 spec — served at /openapi.yaml, powers Swagger UI at /docs
 ```
 
 ## How it works
@@ -76,9 +77,14 @@ The bridge speaks the same protocol as the T3 Code web frontend. Key shapes:
 
 Protocol definitions live in T3 Code at `packages/contracts/src/ws.ts` and `packages/contracts/src/orchestration.ts`.
 
+## API docs
+
+Swagger UI is served at `/docs`, the raw OpenAPI spec at `/openapi.yaml`. Both are exempt from bearer auth so they're always accessible. The spec is a static YAML file (`src/openapi.yaml`) loaded at request time — no code generation involved.
+
 ## Adding new endpoints
 
 1. Add the route in `src/routes.ts`
 2. For read operations: use `events.getEvents()` or add a new method to `EventBuffer`
 3. For write operations: use `ws.request("method.tag", { ...params })` to forward to T3 Code
-4. The T3 Code WS method tags are documented in `packages/contracts/src/ws.ts` (`WS_METHODS` and `ORCHESTRATION_WS_METHODS` constants)
+4. Update `src/openapi.yaml` with the new endpoint schema
+5. The T3 Code WS method tags are documented in `packages/contracts/src/ws.ts` (`WS_METHODS` and `ORCHESTRATION_WS_METHODS` constants)
