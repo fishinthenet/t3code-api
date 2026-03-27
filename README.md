@@ -55,6 +55,85 @@ Interactive API docs are available at `http://localhost:4774/docs` when the brid
 
 Both endpoints are exempt from bearer auth — docs are always accessible.
 
+## Session configuration reference
+
+### Providers and models
+
+Each thread is bound to a provider. The provider determines which AI backend processes the conversation.
+
+| Provider | Value | Available models | Description |
+|----------|-------|------------------|-------------|
+| Codex (OpenAI) | `codex` | `gpt-5.4` | OpenAI Codex agent — code generation and execution via JSON-RPC |
+| Claude Agent | `claudeAgent` | `claude-opus-4-6`, `claude-sonnet-4-6` | Anthropic Claude agent — autonomous coding with tool use |
+
+Provider and model are set when creating a thread and can be overridden per message (turn).
+
+### Runtime mode
+
+Controls whether the agent can execute tools (shell commands, file writes) autonomously or needs explicit approval.
+
+| Value | Behavior |
+|-------|----------|
+| `full-access` (default) | Agent executes tools freely without asking for permission |
+| `approval-required` | Agent pauses before each tool execution and waits for approval |
+
+When using `approval-required`, the agent will emit `thread.approval-response-requested` events. In the current bridge version, approval responses are not yet exposed as a REST endpoint — use `full-access` for fully autonomous operation.
+
+### Interaction mode
+
+Controls whether the agent executes tasks immediately or produces a plan first.
+
+| Value | Behavior |
+|-------|----------|
+| `default` (default) | Agent starts working on the task immediately |
+| `plan` | Agent first produces a plan (markdown), then waits before executing it |
+
+### Thread status lifecycle
+
+After sending a message, the thread goes through these statuses (available via `GET /threads/:threadId/status`):
+
+| Status | Meaning |
+|--------|---------|
+| `idle` | No turn in progress, ready for new messages |
+| `starting` | Turn is initializing, provider session spinning up |
+| `running` | Agent is actively working (generating, executing tools) |
+| `ready` | Agent is waiting for input (e.g. approval in `approval-required` mode) |
+| `interrupted` | Turn was interrupted via `POST /threads/:threadId/interrupt` |
+| `stopped` | Session was explicitly stopped |
+| `error` | Something went wrong — check events for details |
+| `null` | No session events observed yet (thread just created) |
+
+### Domain event types
+
+When polling `GET /threads/:threadId/events`, you can filter by these event types using the `?types=` parameter:
+
+| Event type | When it fires |
+|------------|---------------|
+| `thread.created` | Thread was created |
+| `thread.deleted` | Thread was deleted |
+| `thread.message-sent` | A message (user or assistant) was persisted |
+| `thread.session-set` | Session status changed (contains new status) |
+| `thread.turn-start-requested` | A turn was requested (message submitted) |
+| `thread.turn-diff-completed` | Turn finished and file diff is available |
+| `thread.activity-appended` | Activity log entry (tool calls, info, errors) |
+| `thread.approval-response-requested` | Agent is waiting for tool approval |
+| `thread.meta-updated` | Thread metadata (title, model) was updated |
+| `thread.runtime-mode-set` | Runtime mode was changed |
+| `thread.interaction-mode-set` | Interaction mode was changed |
+| `thread.proposed-plan-upserted` | Agent produced or updated a plan (in `plan` mode) |
+
+### Configuration defaults summary
+
+| Field | Default | Set on |
+|-------|---------|--------|
+| `provider` | `codex` | thread create, message send |
+| `model` | `gpt-5.4` | thread create, message send |
+| `runtimeMode` | `full-access` | thread create, message send |
+| `interactionMode` | `default` | thread create, message send |
+| `title` | `API Thread` | thread create |
+
+All optional fields on `POST /threads/:threadId/messages` are per-turn overrides — they apply only to that turn without changing the thread's defaults.
+
 ## API reference
 
 ### Health

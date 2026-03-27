@@ -210,10 +210,7 @@ paths:
                   threadId:
                     type: string
                   status:
-                    type: string
-                    nullable: true
-                    enum: [idle, starting, running, ready, interrupted, stopped, error, null]
-                    description: "Current session status, or null if no session events observed"
+                    $ref: "#/components/schemas/ThreadStatus"
 
   /threads/{threadId}/interrupt:
     post:
@@ -280,6 +277,47 @@ components:
       description: Thread identifier
 
   schemas:
+    Provider:
+      type: string
+      enum: [codex, claudeAgent]
+      description: |
+        AI provider backend for the thread.
+        - `codex` — OpenAI Codex agent. Models: `gpt-5.4`.
+        - `claudeAgent` — Anthropic Claude agent. Models: `claude-opus-4-6`, `claude-sonnet-4-6`.
+
+    RuntimeMode:
+      type: string
+      enum: [approval-required, full-access]
+      default: full-access
+      description: |
+        Controls tool execution permissions.
+        - `full-access` — agent executes tools (shell, file writes) freely without asking.
+        - `approval-required` — agent pauses before each tool and waits for approval. Emits `thread.approval-response-requested` events.
+
+    InteractionMode:
+      type: string
+      enum: [default, plan]
+      default: default
+      description: |
+        Controls whether the agent executes immediately or plans first.
+        - `default` — agent starts working on the task immediately.
+        - `plan` — agent produces a plan (markdown) first, then waits before executing. Emits `thread.proposed-plan-upserted` events.
+
+    ThreadStatus:
+      type: string
+      nullable: true
+      enum: [idle, starting, running, ready, interrupted, stopped, error, null]
+      description: |
+        Session lifecycle status.
+        - `idle` — no turn in progress, ready for new messages.
+        - `starting` — turn initializing, provider session spinning up.
+        - `running` — agent actively working (generating, executing tools).
+        - `ready` — agent waiting for input (e.g. approval).
+        - `interrupted` — turn was interrupted.
+        - `stopped` — session was explicitly stopped.
+        - `error` — something went wrong (check events for details).
+        - `null` — no session events observed yet.
+
     CreateThreadRequest:
       type: object
       required: [projectId]
@@ -287,18 +325,22 @@ components:
         projectId:
           type: string
           format: uuid
-          description: "Project to create the thread in (get from `GET /snapshot`)"
+          description: "Project to create the thread in. Get available project IDs from `GET /snapshot`."
         title:
           type: string
           default: API Thread
+          description: Display name for the thread.
         provider:
-          type: string
-          enum: [codex, claudeAgent]
+          allOf:
+            - $ref: "#/components/schemas/Provider"
           default: codex
         model:
           type: string
           default: gpt-5.4
-          description: "Model identifier (e.g. `gpt-5.4`, `claude-opus-4-6`, `claude-sonnet-4-6`)"
+          description: |
+            Model identifier. Must match the chosen provider:
+            - `codex` provider: `gpt-5.4`
+            - `claudeAgent` provider: `claude-opus-4-6`, `claude-sonnet-4-6`
         runtimeMode:
           $ref: "#/components/schemas/RuntimeMode"
         interactionMode:
@@ -310,30 +352,24 @@ components:
       properties:
         text:
           type: string
-          description: User message text
+          description: User message text.
         provider:
-          type: string
-          enum: [codex, claudeAgent]
-          description: Override provider for this turn
+          allOf:
+            - $ref: "#/components/schemas/Provider"
+          description: "Override the thread's default provider for this turn only."
         model:
           type: string
-          description: Override model for this turn
+          description: |
+            Override the thread's default model for this turn only.
+            Must match the provider (thread default or overridden).
         runtimeMode:
-          $ref: "#/components/schemas/RuntimeMode"
+          allOf:
+            - $ref: "#/components/schemas/RuntimeMode"
+          description: "Override the thread's default runtime mode for this turn only."
         interactionMode:
-          $ref: "#/components/schemas/InteractionMode"
-
-    RuntimeMode:
-      type: string
-      enum: [approval-required, full-access]
-      default: full-access
-      description: "`approval-required` = agent asks before executing tools; `full-access` = agent runs freely"
-
-    InteractionMode:
-      type: string
-      enum: [default, plan]
-      default: default
-      description: "`plan` = agent produces a plan first instead of executing immediately"
+          allOf:
+            - $ref: "#/components/schemas/InteractionMode"
+          description: "Override the thread's default interaction mode for this turn only."
 
     MessagesResponse:
       type: object
@@ -345,7 +381,7 @@ components:
             $ref: "#/components/schemas/Message"
         lastSequence:
           type: integer
-          description: Use as `after` param in next poll
+          description: "Highest sequence in this response. Use as `?after=` in the next poll to get only new messages."
 
     Message:
       type: object
@@ -353,16 +389,21 @@ components:
       properties:
         sequence:
           type: integer
+          description: Event sequence number (monotonically increasing).
         messageId:
           type: string
+          format: uuid
         role:
           type: string
           enum: [user, assistant, system]
+          description: "Who sent the message."
         text:
           type: string
+          description: Message content.
         turnId:
           type: string
           nullable: true
+          description: "Turn this message belongs to. Null for messages outside a turn."
         createdAt:
           type: string
           format: date-time
@@ -373,16 +414,32 @@ components:
       properties:
         sequence:
           type: integer
+          description: Monotonically increasing event sequence.
         eventId:
           type: string
+          format: uuid
         type:
           type: string
-          description: "Event type (e.g. `thread.message-sent`, `thread.session-set`, `thread.turn-diff-completed`)"
+          description: |
+            Event type. Known types:
+            - `thread.created` — thread was created.
+            - `thread.deleted` — thread was deleted.
+            - `thread.message-sent` — user or assistant message persisted.
+            - `thread.session-set` — session status changed.
+            - `thread.turn-start-requested` — a turn was requested.
+            - `thread.turn-diff-completed` — turn finished, file diff available.
+            - `thread.activity-appended` — activity log entry (tool calls, info, errors).
+            - `thread.approval-response-requested` — agent waiting for tool approval.
+            - `thread.meta-updated` — thread metadata changed.
+            - `thread.runtime-mode-set` — runtime mode changed.
+            - `thread.interaction-mode-set` — interaction mode changed.
+            - `thread.proposed-plan-upserted` — agent produced or updated a plan.
         aggregateId:
           type: string
+          description: Thread or project ID this event belongs to.
         occurredAt:
           type: string
           format: date-time
         payload:
           type: object
-          description: Event-specific payload (shape varies by event type)
+          description: Event-specific payload (shape varies by event type).
