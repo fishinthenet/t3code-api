@@ -1,6 +1,6 @@
 # t3code-api
 
-REST bridge for [T3 Code](https://github.com/anthropics/t3code) — lets external applications control T3 Code sessions over plain HTTP instead of speaking its internal WebSocket protocol directly.
+REST bridge for [T3 Code](https://github.com/pingdotgg/t3code) — lets external applications control T3 Code sessions over plain HTTP instead of speaking its internal WebSocket protocol directly.
 
 ## Why
 
