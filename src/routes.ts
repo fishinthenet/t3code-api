@@ -3,6 +3,8 @@
  */
 
 import { Hono } from "hono";
+import { readFile } from "node:fs/promises";
+import { basename, extname } from "node:path";
 import type { T3WebSocketClient } from "./ws-client";
 import type { EventBuffer, DomainEvent } from "./event-buffer";
 
@@ -19,6 +21,58 @@ const SWAGGER_UI_HTML = `<!DOCTYPE html>
   <script>SwaggerUIBundle({ url: "/openapi.yaml", dom_id: "#swagger-ui" })</script>
 </body>
 </html>`;
+
+const MIME_TYPES: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".svg": "image/svg+xml",
+  ".bmp": "image/bmp",
+};
+
+interface FileAttachmentInput {
+  type: "image";
+  path: string;
+}
+
+interface DataUrlAttachmentInput {
+  type: "image";
+  name: string;
+  mimeType: string;
+  dataUrl: string;
+  sizeBytes: number;
+}
+
+type AttachmentInput = FileAttachmentInput | DataUrlAttachmentInput;
+
+function isFileAttachment(a: AttachmentInput): a is FileAttachmentInput {
+  return "path" in a && typeof a.path === "string";
+}
+
+async function resolveAttachment(input: AttachmentInput) {
+  if (!isFileAttachment(input)) {
+    return input;
+  }
+
+  const ext = extname(input.path).toLowerCase();
+  const mime = MIME_TYPES[ext];
+  if (!mime) {
+    throw new Error(`Unsupported image extension: ${ext} (path: ${input.path})`);
+  }
+
+  const data = await readFile(input.path);
+  const dataUrl = `data:${mime};base64,${data.toString("base64")}`;
+
+  return {
+    type: "image" as const,
+    name: basename(input.path),
+    mimeType: mime,
+    dataUrl,
+    sizeBytes: data.length,
+  };
+}
 
 interface Deps {
   ws: T3WebSocketClient;
@@ -60,28 +114,64 @@ export function createRoutes({ ws, events }: Deps) {
       model?: string;
       runtimeMode?: "approval-required" | "full-access";
       interactionMode?: "default" | "plan";
+      workdir?: string;
+      initialMessage?: {
+        text: string;
+        attachments?: AttachmentInput[];
+      };
     }>();
 
     const threadId = crypto.randomUUID();
-    const commandId = crypto.randomUUID();
+    const provider = body.provider ?? "codex";
+    const model = body.model ?? "gpt-5.4";
+    const runtimeMode = body.runtimeMode ?? "full-access";
+    const interactionMode = body.interactionMode ?? "default";
 
+    // Step 1: Create the thread.
     await ws.request("orchestration.dispatchCommand", {
       command: {
         type: "thread.create",
-        commandId,
+        commandId: crypto.randomUUID(),
         threadId,
         projectId: body.projectId,
         title: body.title ?? "API Thread",
-        model: body.model ?? "gpt-5.4",
-        runtimeMode: body.runtimeMode ?? "full-access",
-        interactionMode: body.interactionMode ?? "default",
+        modelSelection: { provider, model },
+        runtimeMode,
+        interactionMode,
         branch: null,
-        worktreePath: null,
+        worktreePath: body.workdir ?? null,
         createdAt: new Date().toISOString(),
       },
     });
 
-    return c.json({ threadId }, 201);
+    // Step 2: Optionally send the first message in the same request.
+    let messageId: string | undefined;
+    if (body.initialMessage) {
+      messageId = crypto.randomUUID();
+
+      const attachments = body.initialMessage.attachments?.length
+        ? await Promise.all(body.initialMessage.attachments.map(resolveAttachment))
+        : [];
+
+      await ws.request("orchestration.dispatchCommand", {
+        command: {
+          type: "thread.turn.start",
+          commandId: crypto.randomUUID(),
+          threadId,
+          message: {
+            messageId,
+            role: "user",
+            text: body.initialMessage.text,
+            attachments,
+          },
+          runtimeMode,
+          interactionMode,
+          createdAt: new Date().toISOString(),
+        },
+      });
+    }
+
+    return c.json({ threadId, ...(messageId ? { messageId } : {}) }, 201);
   });
 
   app.delete("/threads/:threadId", async (c) => {
@@ -107,10 +197,15 @@ export function createRoutes({ ws, events }: Deps) {
       interactionMode?: "default" | "plan";
       provider?: "codex" | "claudeAgent";
       model?: string;
+      attachments?: AttachmentInput[];
     }>();
 
     const messageId = crypto.randomUUID();
     const commandId = crypto.randomUUID();
+
+    const attachments = body.attachments?.length
+      ? await Promise.all(body.attachments.map(resolveAttachment))
+      : [];
 
     await ws.request("orchestration.dispatchCommand", {
       command: {
@@ -121,10 +216,16 @@ export function createRoutes({ ws, events }: Deps) {
           messageId,
           role: "user",
           text: body.text,
-          attachments: [],
+          attachments,
         },
-        ...(body.provider ? { provider: body.provider } : {}),
-        ...(body.model ? { model: body.model } : {}),
+        ...(body.provider || body.model
+          ? {
+              modelSelection: {
+                provider: body.provider ?? "codex",
+                model: body.model ?? "gpt-5.4",
+              },
+            }
+          : {}),
         runtimeMode: body.runtimeMode ?? "full-access",
         interactionMode: body.interactionMode ?? "default",
         createdAt: new Date().toISOString(),

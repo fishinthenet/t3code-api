@@ -131,6 +131,8 @@ When polling `GET /threads/:threadId/events`, you can filter by these event type
 | `runtimeMode` | `full-access` | thread create, message send |
 | `interactionMode` | `default` | thread create, message send |
 | `title` | `API Thread` | thread create |
+| `workdir` | _(project root)_ | thread create |
+| `attachments` | _(none)_ | thread create (initialMessage), message send |
 
 All optional fields on `POST /threads/:threadId/messages` are per-turn overrides — they apply only to that turn without changing the thread's defaults.
 
@@ -168,11 +170,33 @@ Content-Type: application/json
   "provider": "codex",
   "model": "gpt-5.4",
   "runtimeMode": "full-access",
-  "interactionMode": "default"
+  "interactionMode": "default",
+  "workdir": "/opt/projects/my-app",
+  "initialMessage": {
+    "text": "List all files in the current directory"
+  }
 }
 ```
 
-Only `projectId` is required. Defaults: `provider=codex`, `model=gpt-5.4`, `runtimeMode=full-access`, `interactionMode=default`, `title="API Thread"`.
+Only `projectId` is required. All other fields are optional:
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `title` | `API Thread` | Display name |
+| `provider` | `codex` | AI provider |
+| `model` | `gpt-5.4` | Model identifier |
+| `runtimeMode` | `full-access` | Tool execution permissions |
+| `interactionMode` | `default` | Immediate execution vs plan-first |
+| `workdir` | _(project root)_ | Working directory for the agent |
+| `initialMessage` | _(none)_ | Send first message immediately on creation |
+
+When `initialMessage` is provided, the response includes `messageId`:
+
+```json
+{ "threadId": "generated-uuid", "messageId": "generated-uuid" }
+```
+
+Without `initialMessage`:
 
 ```json
 { "threadId": "generated-uuid" }
@@ -196,13 +220,28 @@ Content-Type: application/json
 }
 ```
 
-Only `text` is required. Optional overrides: `provider`, `model`, `runtimeMode`, `interactionMode`.
+Only `text` is required. Optional overrides: `provider`, `model`, `runtimeMode`, `interactionMode`, `attachments`.
 
 ```json
 { "messageId": "uuid", "commandId": "uuid" }
 ```
 
 After sending, poll `/threads/:threadId/messages` or `/threads/:threadId/status` to track progress.
+
+#### Attachments
+
+You can attach images via local file path (bridge reads and converts) or raw data URL:
+
+```json
+{
+  "text": "What's in this screenshot?",
+  "attachments": [
+    { "type": "image", "path": "/tmp/screenshot.png" }
+  ]
+}
+```
+
+Supported image formats: `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.svg`, `.bmp`. Max 10 MB per image.
 
 ### Read messages
 
@@ -211,7 +250,7 @@ GET /threads/:threadId/messages
 GET /threads/:threadId/messages?after=42&limit=20
 ```
 
-Returns user and assistant messages extracted from buffered events.
+Returns accumulated user and assistant messages. Assistant streaming deltas are automatically concatenated into a single message per `messageId`.
 
 ```json
 {
@@ -222,22 +261,26 @@ Returns user and assistant messages extracted from buffered events.
       "role": "user",
       "text": "Write me a hello world in Python",
       "turnId": "uuid",
-      "createdAt": "2026-03-27T12:00:00Z"
+      "streaming": false,
+      "createdAt": "2026-03-27T12:00:00Z",
+      "updatedAt": "2026-03-27T12:00:00Z"
     },
     {
-      "sequence": 15,
+      "sequence": 55,
       "messageId": "uuid",
       "role": "assistant",
       "text": "Here's a simple hello world...",
       "turnId": "uuid",
-      "createdAt": "2026-03-27T12:00:05Z"
+      "streaming": false,
+      "createdAt": "2026-03-27T12:00:01Z",
+      "updatedAt": "2026-03-27T12:00:05Z"
     }
   ],
-  "lastSequence": 15
+  "lastSequence": 55
 }
 ```
 
-Use `lastSequence` as `?after=` in the next poll to get only new messages.
+The `streaming` field indicates if the assistant is still generating. Poll again while `streaming: true` to get more text. Use `lastSequence` as `?after=` in the next poll to get only new messages.
 
 ### Read raw events
 
@@ -282,23 +325,31 @@ curl http://localhost:4774/health
 # 2. Get projectId from snapshot
 curl http://localhost:4774/snapshot | jq '.projects[0].projectId'
 
-# 3. Create a thread
-THREAD=$(curl -s -X POST http://localhost:4774/threads \
+# 3. Create thread + send first message in one call
+RESULT=$(curl -s -X POST http://localhost:4774/threads \
   -H 'Content-Type: application/json' \
-  -d '{"projectId": "..."}' | jq -r '.threadId')
+  -d '{
+    "projectId": "...",
+    "workdir": "/opt/projects/my-app",
+    "initialMessage": { "text": "List all files in the current directory" }
+  }')
+THREAD=$(echo "$RESULT" | jq -r '.threadId')
 
-# 4. Send a message
-curl -X POST "http://localhost:4774/threads/$THREAD/messages" \
-  -H 'Content-Type: application/json' \
-  -d '{"text": "List all files in the current directory"}'
-
-# 5. Poll for completion
+# 4. Poll for completion
 while [ "$(curl -s http://localhost:4774/threads/$THREAD/status | jq -r '.status')" = "running" ]; do
   sleep 2
 done
 
-# 6. Read the response
+# 5. Read the response (user + assistant messages, accumulated)
 curl "http://localhost:4774/threads/$THREAD/messages"
+
+# 6. Send a follow-up with a screenshot
+curl -X POST "http://localhost:4774/threads/$THREAD/messages" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "text": "Fix the layout issue shown here",
+    "attachments": [{"type": "image", "path": "/tmp/screenshot.png"}]
+  }'
 
 # 7. Check what files changed
 curl "http://localhost:4774/threads/$THREAD/diff"

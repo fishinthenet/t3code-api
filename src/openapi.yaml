@@ -64,7 +64,7 @@ paths:
               $ref: "#/components/schemas/CreateThreadRequest"
       responses:
         "201":
-          description: Thread created
+          description: Thread created (and optionally first turn started)
           content:
             application/json:
               schema:
@@ -74,6 +74,10 @@ paths:
                   threadId:
                     type: string
                     format: uuid
+                  messageId:
+                    type: string
+                    format: uuid
+                    description: "Present only when `initialMessage` was provided."
 
   /threads/{threadId}:
     delete:
@@ -345,6 +349,27 @@ components:
           $ref: "#/components/schemas/RuntimeMode"
         interactionMode:
           $ref: "#/components/schemas/InteractionMode"
+        workdir:
+          type: string
+          description: |
+            Absolute path to the working directory for this thread.
+            The agent will operate in this directory instead of the project's default workspace root.
+            Example: `/opt/projects/my-app`
+        initialMessage:
+          type: object
+          description: |
+            If provided, sends a user message and starts the first turn immediately after thread creation.
+            Combines thread spawn + task into a single request.
+          required: [text]
+          properties:
+            text:
+              type: string
+              description: User message text.
+            attachments:
+              type: array
+              description: Optional image attachments (see Attachment schema).
+              items:
+                $ref: "#/components/schemas/Attachment"
 
     SendMessageRequest:
       type: object
@@ -370,6 +395,57 @@ components:
           allOf:
             - $ref: "#/components/schemas/InteractionMode"
           description: "Override the thread's default interaction mode for this turn only."
+        attachments:
+          type: array
+          description: Optional image attachments.
+          items:
+            $ref: "#/components/schemas/Attachment"
+
+    Attachment:
+      oneOf:
+        - $ref: "#/components/schemas/FileAttachment"
+        - $ref: "#/components/schemas/DataUrlAttachment"
+      description: |
+        Image attachment. Two formats supported:
+        - **File path** (bridge reads the file and converts to data URL): `{"type": "image", "path": "/abs/path/to/screenshot.png"}`
+        - **Data URL** (raw, passed directly to T3 Code): `{"type": "image", "name": "img.png", "mimeType": "image/png", "dataUrl": "data:image/png;base64,...", "sizeBytes": 12345}`
+
+    FileAttachment:
+      type: object
+      required: [type, path]
+      description: |
+        Image attachment by local file path. The bridge reads the file, detects MIME type from extension,
+        and converts it to a data URL before forwarding to T3 Code.
+        Supported extensions: `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.svg`, `.bmp`.
+        Max file size: 10 MB.
+      properties:
+        type:
+          type: string
+          enum: [image]
+        path:
+          type: string
+          description: "Absolute path to the image file (e.g. `/tmp/screenshot.png`)."
+
+    DataUrlAttachment:
+      type: object
+      required: [type, name, mimeType, dataUrl, sizeBytes]
+      description: Raw data URL attachment, passed directly to T3 Code without transformation.
+      properties:
+        type:
+          type: string
+          enum: [image]
+        name:
+          type: string
+          description: Filename for display.
+        mimeType:
+          type: string
+          description: "MIME type (must start with `image/`)."
+        dataUrl:
+          type: string
+          description: "Base64 data URL (e.g. `data:image/png;base64,...`)."
+        sizeBytes:
+          type: integer
+          description: File size in bytes (max 10 MB).
 
     MessagesResponse:
       type: object
@@ -385,11 +461,11 @@ components:
 
     Message:
       type: object
-      required: [sequence, messageId, role, text, createdAt]
+      required: [sequence, messageId, role, text, streaming, createdAt, updatedAt]
       properties:
         sequence:
           type: integer
-          description: Event sequence number (monotonically increasing).
+          description: Event sequence number of the latest event for this message.
         messageId:
           type: string
           format: uuid
@@ -399,14 +475,26 @@ components:
           description: "Who sent the message."
         text:
           type: string
-          description: Message content.
+          description: |
+            Full accumulated message text. For assistant messages, this is the concatenation
+            of all streaming deltas received so far.
         turnId:
           type: string
           nullable: true
           description: "Turn this message belongs to. Null for messages outside a turn."
+        streaming:
+          type: boolean
+          description: |
+            Whether the message is still being streamed. `true` means the assistant is still
+            generating — text will grow on subsequent polls. `false` means the message is complete.
+            User messages are always `false`.
         createdAt:
           type: string
           format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+          description: Timestamp of the latest update to this message.
 
     DomainEvent:
       type: object
