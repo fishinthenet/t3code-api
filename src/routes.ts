@@ -72,10 +72,7 @@ export function createRoutes({ ws, events }: Deps) {
         threadId,
         projectId: body.projectId,
         title: body.title ?? "API Thread",
-        modelSelection: {
-          provider: body.provider ?? "codex",
-          model: body.model ?? "gpt-5.4",
-        },
+        model: body.model ?? "gpt-5.4",
         runtimeMode: body.runtimeMode ?? "full-access",
         interactionMode: body.interactionMode ?? "default",
         branch: null,
@@ -126,14 +123,8 @@ export function createRoutes({ ws, events }: Deps) {
           text: body.text,
           attachments: [],
         },
-        ...(body.provider || body.model
-          ? {
-              modelSelection: {
-                provider: body.provider ?? "codex",
-                model: body.model ?? "gpt-5.4",
-              },
-            }
-          : {}),
+        ...(body.provider ? { provider: body.provider } : {}),
+        ...(body.model ? { model: body.model } : {}),
         runtimeMode: body.runtimeMode ?? "full-access",
         interactionMode: body.interactionMode ?? "default",
         createdAt: new Date().toISOString(),
