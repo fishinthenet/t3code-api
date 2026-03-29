@@ -527,7 +527,21 @@ components:
           description: Extra headers sent with every callback (e.g. `{"Authorization": "Bearer xxx"}`).
         metadata:
           type: object
-          description: Arbitrary JSON returned unchanged in every callback payload.
+          description: |
+            Arbitrary JSON returned unchanged in every callback payload.
+            For `openclaw-hooks` format, the following keys have special meaning:
+            - `agentId` — maps to `agentId` in the OpenClaw payload.
+            - `sessionKey` — maps to `sessionKey` (targets a specific session/DM).
+            - `host` — included in the notification message text.
+        format:
+          type: string
+          enum: [default, openclaw-hooks]
+          default: default
+          description: |
+            Payload format for webhook delivery.
+            - `default` — native t3code payload (`WebhookPayload` schema).
+            - `openclaw-hooks` — transforms payload to OpenClaw `/hooks/agent` format.
+              Uses `metadata.sessionKey` and `metadata.agentId` to target the correct session.
 
     WebhookPayload:
       type: object

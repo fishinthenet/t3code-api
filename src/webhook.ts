@@ -7,6 +7,7 @@ export interface WebhookConfig {
   events: string[];
   headers?: Record<string, string>;
   metadata?: Record<string, unknown>;
+  format?: "default" | "openclaw-hooks";
 }
 
 export interface WebhookPayload {
@@ -148,11 +149,20 @@ export class WebhookManager {
     state.processing = false;
   }
 
+  private formatBody(config: WebhookConfig, payload: WebhookPayload): string {
+    if (config.format === "openclaw-hooks") {
+      return JSON.stringify(formatOpenClawPayload(config, payload));
+    }
+    return JSON.stringify(payload);
+  }
+
   private async deliver(
     config: WebhookConfig,
     payload: WebhookPayload,
     threadId: string,
   ) {
+    const body = this.formatBody(config, payload);
+
     for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
       try {
         const controller = new AbortController();
@@ -169,7 +179,7 @@ export class WebhookManager {
             "X-T3-Thread": threadId,
             ...config.headers,
           },
-          body: JSON.stringify(payload),
+          body,
           signal: controller.signal,
         });
 
@@ -188,6 +198,34 @@ export class WebhookManager {
     }
     // All retries exhausted — silently give up.
   }
+}
+
+/** Format payload for OpenClaw /hooks/agent endpoint. */
+export function formatOpenClawPayload(
+  config: WebhookConfig,
+  payload: WebhookPayload,
+): Record<string, unknown> {
+  const meta = config.metadata ?? {};
+  const durationSec = Math.round(payload.durationMs / 1000);
+  const host = meta.host ? `\nhost: ${meta.host}` : "";
+  const errorLine = payload.error ? `\nerror: ${payload.error}` : "";
+
+  const message =
+    `🔔 t3code: "${payload.title}" — ${payload.event} (${payload.status}, ${payload.messagesCount} msgs, ${durationSec}s)` +
+    `\nthreadId: ${payload.threadId}` +
+    host +
+    errorLine;
+
+  const result: Record<string, unknown> = {
+    message,
+    wakeMode: "now",
+    name: `t3code:${payload.title}`,
+  };
+
+  if (meta.agentId) result.agentId = meta.agentId;
+  if (meta.sessionKey) result.sessionKey = meta.sessionKey;
+
+  return result;
 }
 
 function sleep(ms: number): Promise<void> {

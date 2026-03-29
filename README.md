@@ -100,6 +100,49 @@ curl -s -X POST localhost:4774/threads \
 
 The bridge POSTs a JSON payload to your URL when the thread status transitions to idle/ready (`completed`) or error (`error`). Retries 3 times with exponential backoff (1s → 5s → 15s), 10s timeout per attempt. The `metadata` object is returned unchanged in every callback.
 
+**Webhook formats**: `"default"` (native payload) or `"openclaw-hooks"` (OpenClaw `/hooks/agent` compatible). Set via `webhook.format`.
+
+### OpenClaw integration
+
+With `format: "openclaw-hooks"`, the bridge transforms callbacks into OpenClaw `/hooks/agent` payloads — the agent gets notified in its Telegram/Discord session when a coding task finishes:
+
+```
+  OpenClaw gateway              t3code-api                T3 Code
+       │                            │                        │
+       │  POST /threads             │                        │
+       │  webhook.format=           │                        │
+       │    "openclaw-hooks"        │   WS: thread.create    │
+       │  metadata.sessionKey=...   │───────────────────────►│
+       │───────────────────────────►│                        │
+       │                            │   push: domain events  │
+       │                            │◄───────────────────────│
+       │                            │                        │
+       │   POST /hooks/agent        │   status → idle        │
+       │   {message, sessionKey,    │◄───────────────────────│
+       │    agentId, wakeMode}      │                        │
+       │◄───────────────────────────│                        │
+       │                            │                        │
+       ▼ notifies user in chat      │                        │
+```
+
+```bash
+curl -s -X POST localhost:4774/threads \
+  -H 'Content-Type: application/json' \
+  -d "{\"projectId\": \"$PROJECT\",
+       \"webhook\": {
+         \"url\": \"http://openclaw:18789/hooks/agent\",
+         \"format\": \"openclaw-hooks\",
+         \"headers\": {\"Authorization\": \"Bearer token\"},
+         \"events\": [\"completed\", \"error\"],
+         \"metadata\": {
+           \"agentId\": \"librus\",
+           \"sessionKey\": \"agent:librus:telegram:-1003643494830:6\",
+           \"host\": \"librus\"
+         }
+       },
+       \"initialMessage\": {\"text\": \"Fix the calendar bug\"}}"
+```
+
 ## Architecture
 
 | File | Role |

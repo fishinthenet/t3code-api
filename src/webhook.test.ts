@@ -176,6 +176,103 @@ describe("WebhookManager", () => {
     });
   });
 
+  describe("openclaw-hooks format", () => {
+    it("delivers payload in OpenClaw format with agentId and sessionKey", async () => {
+      const { fn, calls } = mockFetch();
+      const mgr = makeManager(fn);
+      mgr.register("t1", {
+        url: "http://gateway/hooks/agent",
+        events: ["completed"],
+        format: "openclaw-hooks",
+        headers: { Authorization: "Bearer secret" },
+        metadata: {
+          agentId: "librus",
+          sessionKey: "agent:librus:telegram:-1003643494830:6",
+          host: "librus",
+        },
+      }, "proj-1", "Fix calendar bug");
+
+      mgr.onStatusChange("t1", "running");
+      mgr.onStatusChange("t1", "idle", { messagesCount: 184 });
+
+      await new Promise((r) => setTimeout(r, 50));
+
+      expect(calls.length).toBe(1);
+      const body = JSON.parse(calls[0].init.body as string);
+      expect(body.wakeMode).toBe("now");
+      expect(body.name).toBe("t3code:Fix calendar bug");
+      expect(body.agentId).toBe("librus");
+      expect(body.sessionKey).toBe("agent:librus:telegram:-1003643494830:6");
+      expect(body.message).toContain("Fix calendar bug");
+      expect(body.message).toContain("completed");
+      expect(body.message).toContain("idle");
+      expect(body.message).toContain("184 msgs");
+      expect(body.message).toContain("host: librus");
+      expect(body.message).toContain("threadId: t1");
+
+      // Headers still sent
+      const headers = calls[0].init.headers as Record<string, string>;
+      expect(headers.Authorization).toBe("Bearer secret");
+      expect(headers["X-T3-Event"]).toBe("completed");
+    });
+
+    it("omits agentId and sessionKey when not in metadata", async () => {
+      const { fn, calls } = mockFetch();
+      const mgr = makeManager(fn);
+      mgr.register("t1", {
+        url: "http://gateway/hooks/agent",
+        events: ["completed"],
+        format: "openclaw-hooks",
+        metadata: { host: "myhost" },
+      }, "proj-1", "Task");
+
+      mgr.onStatusChange("t1", "idle");
+      await new Promise((r) => setTimeout(r, 50));
+
+      const body = JSON.parse(calls[0].init.body as string);
+      expect(body).not.toHaveProperty("agentId");
+      expect(body).not.toHaveProperty("sessionKey");
+      expect(body.wakeMode).toBe("now");
+    });
+
+    it("includes error text in message for error events", async () => {
+      const { fn, calls } = mockFetch();
+      const mgr = makeManager(fn);
+      mgr.register("t1", {
+        url: "http://gateway/hooks/agent",
+        events: ["error"],
+        format: "openclaw-hooks",
+        metadata: { agentId: "bot" },
+      }, "proj-1", "Broken build");
+
+      mgr.onStatusChange("t1", "error", { error: "Build failed after 3 retries" });
+      await new Promise((r) => setTimeout(r, 50));
+
+      const body = JSON.parse(calls[0].init.body as string);
+      expect(body.message).toContain("error");
+      expect(body.message).toContain("Build failed after 3 retries");
+      expect(body.name).toBe("t3code:Broken build");
+    });
+
+    it("uses default format when format is not set", async () => {
+      const { fn, calls } = mockFetch();
+      const mgr = makeManager(fn);
+      mgr.register("t1", {
+        url: "http://x.com",
+        events: ["completed"],
+      }, "proj-1", "T");
+
+      mgr.onStatusChange("t1", "idle");
+      await new Promise((r) => setTimeout(r, 50));
+
+      // Default format = native WebhookPayload
+      const body = JSON.parse(calls[0].init.body as string);
+      expect(body.event).toBe("completed");
+      expect(body.threadId).toBe("t1");
+      expect(body).not.toHaveProperty("wakeMode");
+    });
+  });
+
   describe("retry behavior", () => {
     it("retries on non-2xx response up to 3 times", async () => {
       let attempt = 0;
