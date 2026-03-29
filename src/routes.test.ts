@@ -92,8 +92,50 @@ describe("routes", () => {
         body: JSON.stringify({ projectId: "proj-1", workdir: "/opt/my-project" }),
       });
 
-      const [, params] = (ws.request as ReturnType<typeof mock>).mock.calls[0];
+      const [tag, params] = (ws.request as ReturnType<typeof mock>).mock.calls[0];
+      expect(tag).toBe("orchestration.dispatchCommand");
+      expect(params.command.type).toBe("thread.create");
       expect(params.command.worktreePath).toBe("/opt/my-project");
+    });
+
+    it("sets worktreePath to null when workdir not provided", async () => {
+      const { app, ws } = makeApp();
+      await json(app, "/threads", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId: "proj-1" }),
+      });
+
+      const [, params] = (ws.request as ReturnType<typeof mock>).mock.calls[0];
+      expect(params.command.worktreePath).toBeNull();
+    });
+
+    it("passes workdir with initialMessage together", async () => {
+      const { app, ws } = makeApp();
+      const res = await json(app, "/threads", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId: "proj-1",
+          workdir: "/opt/my-project",
+          initialMessage: { text: "List files" },
+        }),
+      });
+
+      expect(res.status).toBe(201);
+      expect(res.body.threadId).toBeDefined();
+      expect(res.body.messageId).toBeDefined();
+
+      // thread.create has worktreePath
+      const [, createParams] = (ws.request as ReturnType<typeof mock>).mock.calls[0];
+      expect(createParams.command.type).toBe("thread.create");
+      expect(createParams.command.worktreePath).toBe("/opt/my-project");
+
+      // thread.turn.start uses the same threadId
+      const [, turnParams] = (ws.request as ReturnType<typeof mock>).mock.calls[1];
+      expect(turnParams.command.type).toBe("thread.turn.start");
+      expect(turnParams.command.threadId).toBe(createParams.command.threadId);
+      expect(turnParams.command.message.text).toBe("List files");
     });
 
     it("sends initialMessage as a second dispatch", async () => {
