@@ -82,6 +82,16 @@ interface Deps {
 export function createRoutes({ ws, events }: Deps) {
   const app = new Hono();
 
+  // ── Global error handler ─────────────────────────────────────────
+  app.onError((err, c) => {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    const isDisconnected = message.includes("not connected");
+    return c.json(
+      { error: isDisconnected ? "T3 Code server not connected" : message },
+      isDisconnected ? 502 : 500,
+    );
+  });
+
   /** Ensure a thread's data is in the buffer, hydrating from snapshot if needed. */
   async function ensureHydrated(threadId: string) {
     if (events.hasThread(threadId)) return;

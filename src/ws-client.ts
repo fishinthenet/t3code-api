@@ -42,6 +42,9 @@ export class T3WebSocketClient {
   }
 
   request<T = unknown>(tag: string, params: Record<string, unknown> = {}): Promise<T> {
+    if (!this._connected) {
+      return Promise.reject(new Error(`WebSocket not connected — cannot send ${tag}`));
+    }
     return new Promise((resolve, reject) => {
       const id = String(this.nextId++);
       const timer = setTimeout(() => {

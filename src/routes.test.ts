@@ -483,6 +483,48 @@ describe("routes", () => {
     });
   });
 
+  describe("POST /threads when WS disconnected", () => {
+    it("returns 502 immediately instead of hanging", async () => {
+      const ws = createMockWs();
+      (ws as unknown as Record<string, boolean>).connected = false;
+      (ws.request as ReturnType<typeof mock>).mockImplementation(() =>
+        Promise.reject(new Error("WebSocket not connected — cannot send orchestration.dispatchCommand")),
+      );
+      const events = new EventBuffer();
+      const app = createRoutes({ ws, events });
+
+      const res = await json(app, "/threads", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId: "proj-1" }),
+      });
+
+      expect(res.status).toBe(502);
+      expect(res.body.error).toBe("T3 Code server not connected");
+    });
+  });
+
+  describe("POST /threads/:id/messages when WS disconnected", () => {
+    it("returns 502 immediately instead of hanging", async () => {
+      const ws = createMockWs();
+      (ws as unknown as Record<string, boolean>).connected = false;
+      (ws.request as ReturnType<typeof mock>).mockImplementation(() =>
+        Promise.reject(new Error("WebSocket not connected — cannot send orchestration.dispatchCommand")),
+      );
+      const events = new EventBuffer();
+      const app = createRoutes({ ws, events });
+
+      const res = await json(app, "/threads/tid-1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: "Hello" }),
+      });
+
+      expect(res.status).toBe(502);
+      expect(res.body.error).toBe("T3 Code server not connected");
+    });
+  });
+
   describe("GET /threads/:id/events", () => {
     it("returns filtered events", async () => {
       const { app, events } = makeApp();
