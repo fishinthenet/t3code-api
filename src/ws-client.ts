@@ -83,7 +83,8 @@ export class T3WebSocketClient {
 
     ws.addEventListener("message", (event) => {
       try {
-        const msg = JSON.parse(String(event.data));
+        const raw = String(event.data);
+        const msg = JSON.parse(raw);
 
         // Push message
         if (msg.type === "push") {
@@ -102,10 +103,14 @@ export class T3WebSocketClient {
             } else {
               p.resolve(msg.result);
             }
+          } else {
+            console.warn(`[ws] No pending request for id=${msg.id}`, raw.slice(0, 200));
           }
+        } else {
+          console.warn(`[ws] Unrecognized message (no id, no push)`, raw.slice(0, 200));
         }
-      } catch {
-        // Ignore malformed messages
+      } catch (err) {
+        console.warn(`[ws] Failed to parse message`, String(event.data).slice(0, 200), err);
       }
     });
 
@@ -125,8 +130,10 @@ export class T3WebSocketClient {
 
   private send(data: string) {
     if (this.ws?.readyState === WebSocket.OPEN) {
+      console.log(`[ws] → ${data.slice(0, 300)}`);
       this.ws.send(data);
     } else {
+      console.log(`[ws] queued (not connected): ${data.slice(0, 200)}`);
       this.queue.push(data);
     }
   }
