@@ -82,6 +82,9 @@ describe("routes", () => {
       expect(params.command.type).toBe("thread.create");
       expect(params.command.projectId).toBe("proj-1");
       expect(params.command.modelSelection).toEqual({ provider: "codex", model: "gpt-5.4" });
+      // Flat fields for v0.0.14 compatibility
+      expect(params.command.model).toBe("gpt-5.4");
+      expect(params.command.provider).toBe("codex");
     });
 
     it("passes workdir as worktreePath", async () => {
@@ -200,6 +203,9 @@ describe("routes", () => {
         provider: "claudeAgent",
         model: "claude-opus-4-6",
       });
+      // Flat fields for v0.0.14 compatibility
+      expect(params.command.provider).toBe("claudeAgent");
+      expect(params.command.model).toBe("claude-opus-4-6");
     });
 
     it("does not include modelSelection when no override", async () => {

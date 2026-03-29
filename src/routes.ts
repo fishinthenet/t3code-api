@@ -153,6 +153,7 @@ export function createRoutes({ ws, events }: Deps) {
     const interactionMode = body.interactionMode ?? "default";
 
     // Step 1: Create the thread.
+    // Send both `model` (v0.0.14) and `modelSelection` (dev) for compatibility.
     await ws.request("orchestration.dispatchCommand", {
       command: {
         type: "thread.create",
@@ -160,6 +161,8 @@ export function createRoutes({ ws, events }: Deps) {
         threadId,
         projectId: body.projectId,
         title: body.title ?? "API Thread",
+        model,
+        provider,
         modelSelection: { provider, model },
         runtimeMode,
         interactionMode,
@@ -243,8 +246,11 @@ export function createRoutes({ ws, events }: Deps) {
           text: body.text,
           attachments,
         },
+        // Send both flat fields (v0.0.14) and nested modelSelection (dev).
         ...(body.provider || body.model
           ? {
+              provider: body.provider ?? "codex",
+              model: body.model ?? "gpt-5.4",
               modelSelection: {
                 provider: body.provider ?? "codex",
                 model: body.model ?? "gpt-5.4",
