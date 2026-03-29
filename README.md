@@ -11,6 +11,8 @@
 ┌─────────────────────────────────────────────────────────┐
 │                     t3code-api                          │
 │              REST ←→ WebSocket bridge                   │
+│                                                         │
+│   on completed/error ──► POST webhook callback          │
 └─────────────────────────┬───────────────────────────────┘
                           │ WebSocket
                           ▼
