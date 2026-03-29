@@ -304,9 +304,9 @@ describe("WebhookManager", () => {
         format: "openclaw-hooks",
         headers: { Authorization: "Bearer secret" },
         metadata: {
-          agentId: "librus",
-          sessionKey: "agent:librus:telegram:-1003643494830:6",
-          host: "librus",
+          agentId: "test-agent",
+          sessionKey: "agent:test-agent:telegram:-100123456789:1",
+          host: "test-agent",
         },
       }, "proj-1", "Fix calendar bug");
 
@@ -319,13 +319,13 @@ describe("WebhookManager", () => {
       const body = JSON.parse(calls[0].init.body as string);
       expect(body.wakeMode).toBe("now");
       expect(body.name).toBe("t3code:Fix calendar bug");
-      expect(body.agentId).toBe("librus");
-      expect(body.sessionKey).toBe("agent:librus:telegram:-1003643494830:6");
+      expect(body.agentId).toBe("test-agent");
+      expect(body.sessionKey).toBe("agent:test-agent:telegram:-100123456789:1");
       expect(body.message).toContain("Fix calendar bug");
       expect(body.message).toContain("status:idle");
       expect(body.message).toContain("idle");
       expect(body.message).toContain("184 msgs");
-      expect(body.message).toContain("host: librus");
+      expect(body.message).toContain("host: test-agent");
       expect(body.message).toContain("threadId: t1");
 
       // Headers still sent

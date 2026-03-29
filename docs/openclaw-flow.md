@@ -21,14 +21,14 @@ curl -s -X POST http://t3code:4774/threads \
     "projectId": "<PROJECT_ID>",
     "initialMessage": { "text": "Fix the calendar bug" },
     "webhook": {
-      "url": "http://openclaw:18789/hooks/agent",
+      "url": "http://your-openclaw-host:18789/hooks/agent",
       "format": "openclaw-hooks",
       "events": ["completed", "error"],
       "headers": { "Authorization": "Bearer <OPENCLAW_TOKEN>" },
       "metadata": {
-        "agentId": "librus",
-        "sessionKey": "agent:librus:telegram:-1003643494830:6",
-        "host": "librus"
+        "agentId": "my-agent",
+        "sessionKey": "agent:my-agent:telegram:-100123456789:1",
+        "host": "my-agent"
       }
     }
   }'
@@ -44,9 +44,9 @@ No polling needed. When the agent finishes (status `idle`/`ready`) or hits an er
 {
   "message": "Fix the calendar bug: status:idle (24 msgs, 38s)",
   "wakeMode": "agent",
-  "name": "t3code (librus)",
-  "agentId": "librus",
-  "sessionKey": "agent:librus:telegram:-1003643494830:6"
+  "name": "t3code (my-agent)",
+  "agentId": "my-agent",
+  "sessionKey": "agent:my-agent:telegram:-100123456789:1"
 }
 ```
 
@@ -56,8 +56,8 @@ OpenClaw delivers the notification to the correct chat session (Telegram/Discord
 
 | Key | Required | Purpose |
 |-----|----------|---------|
-| `sessionKey` | **yes** | Identifies the chat session to wake (e.g. `agent:librus:telegram:<chat_id>:<thread_id>`) |
-| `agentId` | yes | Agent name in OpenClaw (e.g. `librus`) |
+| `sessionKey` | **yes** | Identifies the chat session to wake (e.g. `agent:my-agent:telegram:<chat_id>:<topic_id>`) |
+| `agentId` | yes | Agent name in OpenClaw (e.g. `my-agent`) |
 | `host` | no | Appears in the notification message text |
 
 ## Optional: read results after callback

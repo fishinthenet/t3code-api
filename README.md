@@ -146,14 +146,14 @@ curl -s -X POST localhost:4774/threads \
   -H 'Content-Type: application/json' \
   -d "{\"projectId\": \"$PROJECT\",
        \"webhook\": {
-         \"url\": \"http://openclaw:18789/hooks/agent\",
+         \"url\": \"http://your-openclaw-host:18789/hooks/agent\",
          \"format\": \"openclaw-hooks\",
          \"headers\": {\"Authorization\": \"Bearer token\"},
          \"events\": [\"completed\", \"error\"],
          \"metadata\": {
-           \"agentId\": \"librus\",
-           \"sessionKey\": \"agent:librus:telegram:-1003643494830:6\",
-           \"host\": \"librus\"
+           \"agentId\": \"my-agent\",
+           \"sessionKey\": \"agent:my-agent:telegram:-100123456789:1\",
+           \"host\": \"my-agent\"
          }
        },
        \"initialMessage\": {\"text\": \"Fix the calendar bug\"}}"
