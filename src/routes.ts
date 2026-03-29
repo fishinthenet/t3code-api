@@ -121,7 +121,7 @@ export function createRoutes({ ws, events, webhooks }: Deps) {
   // ── Health ──────────────────────────────────────────────────────────
 
   app.get("/health", (c) =>
-    c.json({ ok: true, version: "0.0.19", connected: ws.connected, lastSequence: events.lastSequence }),
+    c.json({ ok: true, version: "0.0.20", connected: ws.connected, lastSequence: events.lastSequence }),
   );
 
   // ── Snapshot ────────────────────────────────────────────────────────
@@ -160,6 +160,9 @@ export function createRoutes({ ws, events, webhooks }: Deps) {
     if (body.modelOptions) modelSelection.options = body.modelOptions;
 
     // Step 1: Create the thread.
+    // Send both nested modelSelection (v0.0.15+) and flat model field (v0.0.14)
+    // for backward compatibility. Effect Schema strips unknown properties,
+    // so each version uses only the fields it recognizes.
     await ws.request("orchestration.dispatchCommand", {
       command: {
         type: "thread.create",
@@ -167,6 +170,7 @@ export function createRoutes({ ws, events, webhooks }: Deps) {
         threadId,
         projectId: body.projectId,
         title: body.title ?? "API Thread",
+        model,
         modelSelection,
         runtimeMode,
         interactionMode,
@@ -206,6 +210,10 @@ export function createRoutes({ ws, events, webhooks }: Deps) {
             text: body.initialMessage.text,
             attachments,
           },
+          // Flat fields for v0.0.14 compat (optional in turn start)
+          provider,
+          model,
+          ...(body.modelOptions ? { modelOptions: body.modelOptions } : {}),
           runtimeMode,
           interactionMode,
           createdAt: new Date().toISOString(),
@@ -272,7 +280,11 @@ export function createRoutes({ ws, events, webhooks }: Deps) {
           text: body.text,
           attachments,
         },
+        // Nested for v0.0.15+, flat for v0.0.14 compat
         ...(turnModelSelection ? { modelSelection: turnModelSelection } : {}),
+        ...(body.provider ? { provider: body.provider } : {}),
+        ...(body.model ? { model: body.model } : {}),
+        ...(body.modelOptions ? { modelOptions: body.modelOptions } : {}),
         runtimeMode: body.runtimeMode ?? "full-access",
         interactionMode: body.interactionMode ?? "default",
         createdAt: new Date().toISOString(),

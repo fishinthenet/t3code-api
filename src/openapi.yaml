@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: t3code-api
   description: REST bridge for T3 Code — control coding agent sessions over plain HTTP.
-  version: 0.0.19
+  version: 0.0.20
 
 servers:
   - url: http://localhost:4774
