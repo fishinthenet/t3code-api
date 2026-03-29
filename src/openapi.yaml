@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: t3code-api
   description: REST bridge for T3 Code — control coding agent sessions over plain HTTP.
-  version: 0.0.18
+  version: 0.0.19
 
 servers:
   - url: http://localhost:4774
@@ -234,6 +234,55 @@ paths:
                   interrupted:
                     type: boolean
 
+  /server/settings:
+    get:
+      operationId: getServerSettings
+      summary: Get T3 Code server settings
+      description: "Returns the current server-authoritative settings: provider configuration, streaming, thread defaults."
+      tags: [Server]
+      responses:
+        "200":
+          description: Server settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServerSettings"
+    patch:
+      operationId: updateServerSettings
+      summary: Update server settings
+      description: Apply a partial settings update. Only provided fields are changed.
+      tags: [Server]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ServerSettingsPatch"
+      responses:
+        "200":
+          description: Settings updated
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Update result from T3 Code server
+
+  /server/providers/refresh:
+    post:
+      operationId: refreshProviders
+      summary: Refresh provider availability
+      description: Re-checks installed providers, their versions, auth status, and available models.
+      tags: [Server]
+      responses:
+        "200":
+          description: Updated provider list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ServerProvider"
+
   /threads/{threadId}/diff:
     get:
       operationId: getThreadDiff
@@ -345,6 +394,8 @@ components:
             Model identifier. Must match the chosen provider:
             - `codex` provider: `gpt-5.4`
             - `claudeAgent` provider: `claude-opus-4-6`, `claude-sonnet-4-6`
+        modelOptions:
+          $ref: "#/components/schemas/ModelOptions"
         runtimeMode:
           $ref: "#/components/schemas/RuntimeMode"
         interactionMode:
@@ -389,6 +440,10 @@ components:
           description: |
             Override the thread's default model for this turn only.
             Must match the provider (thread default or overridden).
+        modelOptions:
+          allOf:
+            - $ref: "#/components/schemas/ModelOptions"
+          description: "Override model options for this turn only. Requires `provider` or `model` to also be set."
         runtimeMode:
           allOf:
             - $ref: "#/components/schemas/RuntimeMode"
@@ -636,3 +691,138 @@ components:
         payload:
           type: object
           description: Event-specific payload (shape varies by event type).
+
+    ModelOptions:
+      type: object
+      description: |
+        Provider-specific model options. Fields depend on the provider:
+        - **Codex**: `reasoningEffort` (`xhigh`, `high`, `medium`, `low`), `fastMode` (boolean).
+        - **Claude**: `thinking` (boolean), `effort` (`low`, `medium`, `high`, `max`, `ultrathink`), `fastMode` (boolean), `contextWindow` (string, e.g. `"200k"`).
+      properties:
+        reasoningEffort:
+          type: string
+          enum: [xhigh, high, medium, low]
+          description: "Codex reasoning effort level."
+        fastMode:
+          type: boolean
+          description: "Enable fast mode (both providers)."
+        thinking:
+          type: boolean
+          description: "Enable thinking/extended reasoning (Claude only)."
+        effort:
+          type: string
+          enum: [low, medium, high, max, ultrathink]
+          description: "Claude reasoning effort level."
+        contextWindow:
+          type: string
+          description: "Claude context window override (e.g. `200k`)."
+
+    ServerSettings:
+      type: object
+      description: Server-authoritative settings from T3 Code.
+      properties:
+        enableAssistantStreaming:
+          type: boolean
+        defaultThreadEnvMode:
+          type: string
+          enum: [local, worktree]
+        textGenerationModelSelection:
+          type: object
+          description: Model used for git text generation (commit messages, etc.)
+        providers:
+          type: object
+          properties:
+            codex:
+              $ref: "#/components/schemas/ProviderSettings"
+            claudeAgent:
+              $ref: "#/components/schemas/ProviderSettings"
+
+    ProviderSettings:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        binaryPath:
+          type: string
+        homePath:
+          type: string
+          description: "Codex only — home directory path."
+        customModels:
+          type: array
+          items:
+            type: string
+
+    ServerSettingsPatch:
+      type: object
+      description: Partial settings update. Only include fields you want to change.
+      properties:
+        enableAssistantStreaming:
+          type: boolean
+        defaultThreadEnvMode:
+          type: string
+          enum: [local, worktree]
+        textGenerationModelSelection:
+          type: object
+        providers:
+          type: object
+          properties:
+            codex:
+              type: object
+              properties:
+                enabled:
+                  type: boolean
+                binaryPath:
+                  type: string
+                customModels:
+                  type: array
+                  items:
+                    type: string
+            claudeAgent:
+              type: object
+              properties:
+                enabled:
+                  type: boolean
+                binaryPath:
+                  type: string
+                customModels:
+                  type: array
+                  items:
+                    type: string
+
+    ServerProvider:
+      type: object
+      description: Provider availability status.
+      required: [provider, enabled, installed, status, authStatus, models]
+      properties:
+        provider:
+          $ref: "#/components/schemas/Provider"
+        enabled:
+          type: boolean
+        installed:
+          type: boolean
+        version:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [ready, warning, error, disabled]
+        authStatus:
+          type: string
+          enum: [authenticated, unauthenticated, unknown]
+        checkedAt:
+          type: string
+          format: date-time
+        message:
+          type: string
+          description: Human-readable status message (warnings, errors).
+        models:
+          type: array
+          items:
+            type: object
+            properties:
+              slug:
+                type: string
+              name:
+                type: string
+              isCustom:
+                type: boolean

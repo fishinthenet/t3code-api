@@ -53,6 +53,9 @@ open http://localhost:4774/docs   # Swagger UI
 | `GET` | `/threads/:id/events` | Raw domain events (filterable by `?types=`) |
 | `POST` | `/threads/:id/interrupt` | Interrupt current turn |
 | `GET` | `/threads/:id/diff` | File changes from agent turns |
+| `GET` | `/server/settings` | T3 Code server settings (providers, models) |
+| `PATCH` | `/server/settings` | Update server settings |
+| `POST` | `/server/providers/refresh` | Re-check provider availability |
 | `GET` | `/docs` | Swagger UI |
 
 Full request/response schemas available at `/docs`.
@@ -79,7 +82,7 @@ done
 curl -s "localhost:4774/threads/$TID/messages" | jq '.messages[-1].text'
 ```
 
-**Thread options**: `provider` (`codex`|`claudeAgent`), `model` (`gpt-5.4`, `claude-opus-4-6`, `claude-sonnet-4-6`), `runtimeMode`, `interactionMode`, `workdir`, `webhook`, `attachments`. All optional — see `/docs` for details.
+**Thread options**: `provider` (`codex`|`claudeAgent`), `model` (`gpt-5.4`, `claude-opus-4-6`, `claude-sonnet-4-6`), `modelOptions` (provider-specific: `reasoningEffort`, `thinking`, `effort`, `contextWindow`, `fastMode`), `runtimeMode`, `interactionMode`, `workdir`, `webhook`, `attachments`. All optional — see `/docs` for details.
 
 ### Webhooks
 

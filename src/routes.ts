@@ -121,7 +121,7 @@ export function createRoutes({ ws, events, webhooks }: Deps) {
   // ── Health ──────────────────────────────────────────────────────────
 
   app.get("/health", (c) =>
-    c.json({ ok: true, version: "0.0.18", connected: ws.connected, lastSequence: events.lastSequence }),
+    c.json({ ok: true, version: "0.0.19", connected: ws.connected, lastSequence: events.lastSequence }),
   );
 
   // ── Snapshot ────────────────────────────────────────────────────────
@@ -139,6 +139,7 @@ export function createRoutes({ ws, events, webhooks }: Deps) {
       title?: string;
       provider?: "codex" | "claudeAgent";
       model?: string;
+      modelOptions?: Record<string, unknown>;
       runtimeMode?: "approval-required" | "full-access";
       interactionMode?: "default" | "plan";
       workdir?: string;
@@ -155,8 +156,10 @@ export function createRoutes({ ws, events, webhooks }: Deps) {
     const runtimeMode = body.runtimeMode ?? "full-access";
     const interactionMode = body.interactionMode ?? "default";
 
+    const modelSelection: Record<string, unknown> = { provider, model };
+    if (body.modelOptions) modelSelection.options = body.modelOptions;
+
     // Step 1: Create the thread.
-    // Send both `model` (v0.0.14) and `modelSelection` (dev) for compatibility.
     await ws.request("orchestration.dispatchCommand", {
       command: {
         type: "thread.create",
@@ -164,9 +167,7 @@ export function createRoutes({ ws, events, webhooks }: Deps) {
         threadId,
         projectId: body.projectId,
         title: body.title ?? "API Thread",
-        model,
-        provider,
-        modelSelection: { provider, model },
+        modelSelection,
         runtimeMode,
         interactionMode,
         branch: null,
@@ -239,6 +240,7 @@ export function createRoutes({ ws, events, webhooks }: Deps) {
       interactionMode?: "default" | "plan";
       provider?: "codex" | "claudeAgent";
       model?: string;
+      modelOptions?: Record<string, unknown>;
       attachments?: AttachmentInput[];
     }>();
 
@@ -248,6 +250,16 @@ export function createRoutes({ ws, events, webhooks }: Deps) {
     const attachments = body.attachments?.length
       ? await Promise.all(body.attachments.map(resolveAttachment))
       : [];
+
+    // Build optional per-turn model override.
+    let turnModelSelection: Record<string, unknown> | undefined;
+    if (body.provider || body.model) {
+      turnModelSelection = {
+        provider: body.provider ?? "codex",
+        model: body.model ?? "gpt-5.4",
+      };
+      if (body.modelOptions) turnModelSelection.options = body.modelOptions;
+    }
 
     await ws.request("orchestration.dispatchCommand", {
       command: {
@@ -260,17 +272,7 @@ export function createRoutes({ ws, events, webhooks }: Deps) {
           text: body.text,
           attachments,
         },
-        // Send both flat fields (v0.0.14) and nested modelSelection (dev).
-        ...(body.provider || body.model
-          ? {
-              provider: body.provider ?? "codex",
-              model: body.model ?? "gpt-5.4",
-              modelSelection: {
-                provider: body.provider ?? "codex",
-                model: body.model ?? "gpt-5.4",
-              },
-            }
-          : {}),
+        ...(turnModelSelection ? { modelSelection: turnModelSelection } : {}),
         runtimeMode: body.runtimeMode ?? "full-access",
         interactionMode: body.interactionMode ?? "default",
         createdAt: new Date().toISOString(),
@@ -356,6 +358,24 @@ export function createRoutes({ ws, events, webhooks }: Deps) {
       toTurnCount: from || undefined,
     });
     return c.json(diff);
+  });
+
+  // ── Server settings ──────────────────────────────────────────────────
+
+  app.get("/server/settings", async (c) => {
+    const settings = await ws.request("server.getSettings");
+    return c.json(settings);
+  });
+
+  app.patch("/server/settings", async (c) => {
+    const patch = await c.req.json();
+    const result = await ws.request("server.updateSettings", { patch });
+    return c.json(result);
+  });
+
+  app.post("/server/providers/refresh", async (c) => {
+    const result = await ws.request("server.refreshProviders");
+    return c.json(result);
   });
 
   return app;

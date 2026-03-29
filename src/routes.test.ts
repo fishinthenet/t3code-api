@@ -84,9 +84,9 @@ describe("routes", () => {
       expect(params.command.type).toBe("thread.create");
       expect(params.command.projectId).toBe("proj-1");
       expect(params.command.modelSelection).toEqual({ provider: "codex", model: "gpt-5.4" });
-      // Flat fields for v0.0.14 compatibility
-      expect(params.command.model).toBe("gpt-5.4");
-      expect(params.command.provider).toBe("codex");
+      // No flat model/provider fields — only modelSelection (T3 Code v0.0.15+).
+      expect(params.command.model).toBeUndefined();
+      expect(params.command.provider).toBeUndefined();
     });
 
     it("passes workdir as worktreePath", async () => {
@@ -205,9 +205,9 @@ describe("routes", () => {
         provider: "claudeAgent",
         model: "claude-opus-4-6",
       });
-      // Flat fields for v0.0.14 compatibility
-      expect(params.command.provider).toBe("claudeAgent");
-      expect(params.command.model).toBe("claude-opus-4-6");
+      // No flat model/provider fields — only modelSelection (T3 Code v0.0.15+).
+      expect(params.command.provider).toBeUndefined();
+      expect(params.command.model).toBeUndefined();
     });
 
     it("does not include modelSelection when no override", async () => {
@@ -656,6 +656,153 @@ describe("routes", () => {
       expect(res.status).toBe(201);
       const config = webhooks.get(res.body.threadId as string)!;
       expect(config.events).toEqual(["completed", "error"]);
+    });
+  });
+
+  describe("POST /threads with modelOptions", () => {
+    it("passes modelOptions into modelSelection.options", async () => {
+      const { app, ws } = makeApp();
+      await json(app, "/threads", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId: "proj-1",
+          provider: "codex",
+          model: "gpt-5.4",
+          modelOptions: { reasoningEffort: "high" },
+        }),
+      });
+
+      const [, params] = (ws.request as ReturnType<typeof mock>).mock.calls[0];
+      expect(params.command.modelSelection).toEqual({
+        provider: "codex",
+        model: "gpt-5.4",
+        options: { reasoningEffort: "high" },
+      });
+    });
+
+    it("omits options when modelOptions not provided", async () => {
+      const { app, ws } = makeApp();
+      await json(app, "/threads", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId: "proj-1" }),
+      });
+
+      const [, params] = (ws.request as ReturnType<typeof mock>).mock.calls[0];
+      expect(params.command.modelSelection).toEqual({
+        provider: "codex",
+        model: "gpt-5.4",
+      });
+      expect(params.command.modelSelection.options).toBeUndefined();
+    });
+  });
+
+  describe("POST /threads/:id/messages with modelOptions", () => {
+    it("passes modelOptions into modelSelection.options", async () => {
+      const { app, ws } = makeApp();
+      await json(app, "/threads/tid-1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: "Hello",
+          provider: "claudeAgent",
+          model: "claude-opus-4-6",
+          modelOptions: { thinking: true, effort: "high" },
+        }),
+      });
+
+      const [, params] = (ws.request as ReturnType<typeof mock>).mock.calls[0];
+      expect(params.command.modelSelection).toEqual({
+        provider: "claudeAgent",
+        model: "claude-opus-4-6",
+        options: { thinking: true, effort: "high" },
+      });
+    });
+
+    it("does not include modelOptions when no provider/model override", async () => {
+      const { app, ws } = makeApp();
+      await json(app, "/threads/tid-1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: "Hello" }),
+      });
+
+      const [, params] = (ws.request as ReturnType<typeof mock>).mock.calls[0];
+      expect(params.command.modelSelection).toBeUndefined();
+    });
+  });
+
+  describe("Server settings endpoints", () => {
+    it("GET /server/settings proxies to server.getSettings", async () => {
+      const ws = createMockWs();
+      const settingsData = {
+        enableAssistantStreaming: false,
+        defaultThreadEnvMode: "local",
+        providers: {
+          codex: { enabled: true, binaryPath: "codex" },
+          claudeAgent: { enabled: true, binaryPath: "claude" },
+        },
+      };
+      (ws.request as ReturnType<typeof mock>).mockImplementation(
+        (tag: string) => {
+          if (tag === "server.getSettings") return Promise.resolve(settingsData);
+          return Promise.resolve({});
+        },
+      );
+      const events = new EventBuffer();
+      const app = createRoutes({ ws, events });
+
+      const res = await json(app, "/server/settings");
+      expect(res.status).toBe(200);
+      expect(res.body.enableAssistantStreaming).toBe(false);
+      expect(res.body.providers).toBeDefined();
+    });
+
+    it("PATCH /server/settings proxies to server.updateSettings", async () => {
+      const ws = createMockWs();
+      (ws.request as ReturnType<typeof mock>).mockImplementation(
+        (tag: string, params: Record<string, unknown>) => {
+          if (tag === "server.updateSettings") {
+            return Promise.resolve({ ok: true, patch: params.patch });
+          }
+          return Promise.resolve({});
+        },
+      );
+      const events = new EventBuffer();
+      const app = createRoutes({ ws, events });
+
+      const res = await json(app, "/server/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          providers: { codex: { enabled: false } },
+        }),
+      });
+      expect(res.status).toBe(200);
+
+      const [tag, params] = (ws.request as ReturnType<typeof mock>).mock.calls[0];
+      expect(tag).toBe("server.updateSettings");
+      expect(params.patch).toEqual({ providers: { codex: { enabled: false } } });
+    });
+
+    it("POST /server/providers/refresh proxies to server.refreshProviders", async () => {
+      const ws = createMockWs();
+      const providersData = [
+        { provider: "codex", enabled: true, status: "ready" },
+      ];
+      (ws.request as ReturnType<typeof mock>).mockImplementation(
+        (tag: string) => {
+          if (tag === "server.refreshProviders") return Promise.resolve(providersData);
+          return Promise.resolve({});
+        },
+      );
+      const events = new EventBuffer();
+      const app = createRoutes({ ws, events });
+
+      const res = await json(app, "/server/providers/refresh", { method: "POST" });
+      expect(res.status).toBe(200);
+      expect(ws.request).toHaveBeenCalledWith("server.refreshProviders");
     });
   });
 
