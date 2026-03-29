@@ -4,6 +4,27 @@
 
 REST API at `http://t3code:4774` that lets you dispatch coding tasks to agents (Codex/Claude) and get a callback when they finish.
 
+## Prerequisites: OpenClaw gateway configuration
+
+The OpenClaw gateway must have hooks enabled with the right session policy. In your OpenClaw config:
+
+```yaml
+hooks:
+  enabled: true
+  token: "<your-secret-token>"
+  allowRequestSessionKey: true
+  allowedSessionKeyPrefixes: ["agent:"]
+```
+
+| Setting | Required | Why |
+|---------|----------|-----|
+| `hooks.enabled` | **yes** | Enables the `/hooks/agent` endpoint |
+| `hooks.token` | **yes** | Bearer token for authenticating webhook requests |
+| `hooks.allowRequestSessionKey` | **yes** | Without this, OpenClaw rejects any `sessionKey` in the request body (returns 400) |
+| `hooks.allowedSessionKeyPrefixes` | recommended | Restricts which session keys callers can target. Use `["agent:"]` to allow agent-scoped keys like `agent:my-agent:telegram:...` |
+
+The `agentId` sent in the webhook must match a known agent in your OpenClaw config (listed under `agents.list`). If it doesn't match, OpenClaw routes to the default agent instead.
+
 ## Flow in 3 steps
 
 ### 1. Get `projectId`
@@ -43,21 +64,21 @@ No polling needed. When the agent finishes (status `idle`/`ready`) or hits an er
 ```json
 {
   "message": "Fix the calendar bug: status:idle (24 msgs, 38s)",
-  "wakeMode": "agent",
-  "name": "t3code (my-agent)",
+  "wakeMode": "now",
+  "name": "t3code:Fix the calendar bug",
   "agentId": "my-agent",
   "sessionKey": "agent:my-agent:telegram:-100123456789:1"
 }
 ```
 
-OpenClaw delivers the notification to the correct chat session (Telegram/Discord) identified by `sessionKey`.
+OpenClaw parses the `sessionKey`, strips the `agent:my-agent:` prefix (since it matches `agentId`), and routes the notification to the `telegram:-100123456789:1` session — waking the agent in the correct chat.
 
 ## Metadata keys
 
 | Key | Required | Purpose |
 |-----|----------|---------|
-| `sessionKey` | **yes** | Identifies the chat session to wake (e.g. `agent:my-agent:telegram:<chat_id>:<topic_id>`) |
-| `agentId` | yes | Agent name in OpenClaw (e.g. `my-agent`) |
+| `sessionKey` | **yes** | Identifies the chat session to wake. Format: `agent:<agentId>:<channel>:<chat_id>:<topic_id>`. OpenClaw strips the `agent:<agentId>:` prefix before routing. |
+| `agentId` | yes | Agent name in OpenClaw. Must be listed in `agents.list` config, otherwise falls back to default agent. |
 | `host` | no | Appears in the notification message text |
 
 ## Optional: read results after callback
@@ -78,8 +99,18 @@ curl -s "http://t3code:4774/threads/<THREAD_ID>/diff"
 - `runtimeMode`: `"full-access"` (default) or `"approval-required"`
 - `workdir`: absolute path to working directory (optional)
 
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| Bridge logs `returned 400` | `hooks.allowRequestSessionKey` is `false` (default) | Set `hooks.allowRequestSessionKey: true` in OpenClaw config |
+| Callback arrives but wrong agent responds | `agentId` not in OpenClaw's `agents.list` | Add the agent to config or use the correct `agentId` |
+| Callback arrives but no notification | `sessionKey` doesn't match an active session | Verify the session key matches the current chat (channel, chat_id, topic_id) |
+| Bridge logs `ECONNREFUSED` | OpenClaw gateway unreachable | Check that the gateway is running and the URL/port is correct |
+| No webhook logs at all | Bridge version < 0.0.15 (no webhook support) | Check `GET /health` returns `version: "0.0.19"` or later |
+
 ## Important
 
 - Webhook config lives **in bridge memory** — lost on restart.
-- `sessionKey` must exactly match the active session in OpenClaw, otherwise the callback arrives but won't wake the agent.
+- `wakeMode` is always `"now"` (immediate delivery). OpenClaw also supports `"next-heartbeat"` but the bridge doesn't expose this.
 - Retry: 3 attempts with backoff (1s -> 5s -> 15s), 10s timeout per attempt.
