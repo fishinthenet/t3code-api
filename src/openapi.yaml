@@ -514,12 +514,18 @@ components:
           type: array
           items:
             type: string
-            enum: [completed, error]
+            enum: [completed, error, "status:idle", "status:ready", "status:error", "status:running"]
           default: [completed, error]
           description: |
             Which events to fire. Defaults to `["completed", "error"]`.
-            - `completed` — thread status transitions to `idle` or `ready` (agent finished).
-            - `error` — thread status transitions to `error`.
+            Granular events for precise control:
+            - `status:idle` — status transitions to `idle` (agent finished, turn complete).
+            - `status:ready` — status transitions to `ready` (agent waiting for input).
+            - `status:error` — status transitions to `error`.
+            - `status:running` — status transitions to `running`.
+            Backward-compatible aliases:
+            - `completed` — alias for `status:idle` + `status:ready`.
+            - `error` — alias for `status:error`.
         headers:
           type: object
           additionalProperties:
@@ -545,18 +551,21 @@ components:
 
     WebhookPayload:
       type: object
-      required: [event, threadId, projectId, title, status, durationMs, messagesCount]
+      required: [event, webhookSeq, threadId, projectId, title, previousStatus, status, durationMs, messagesCount]
       description: |
         Payload POSTed to the webhook URL. Sent with headers:
         - `Content-Type: application/json`
-        - `X-T3-Event: <event>`
+        - `X-T3-Event: <event>` (granular event name, e.g. `status:idle`)
         - `X-T3-Thread: <threadId>`
         - Plus any custom headers from the webhook config.
       properties:
         event:
           type: string
-          enum: [completed, error]
-          description: The webhook event that triggered this callback.
+          enum: ["status:idle", "status:ready", "status:error", "status:running"]
+          description: "Granular event name (e.g. `status:idle`). Always uses the `status:*` form, even when subscribed via aliases."
+        webhookSeq:
+          type: integer
+          description: Auto-incrementing sequence number per thread (1, 2, 3...). Useful for deduplication and ordering.
         threadId:
           type: string
           format: uuid
@@ -566,6 +575,10 @@ components:
         title:
           type: string
           description: Thread title.
+        previousStatus:
+          type: string
+          nullable: true
+          description: "Status before this transition (e.g. `running`). `null` if this is the first status change."
         status:
           type: string
           description: "Current thread status (e.g. `idle`, `ready`, `error`)."
@@ -580,7 +593,7 @@ components:
           description: The `metadata` object from the webhook config, returned unchanged.
         error:
           type: string
-          description: "Present only for `error` events — describes what went wrong."
+          description: "Present only for `status:error` events — describes what went wrong."
 
     DomainEvent:
       type: object

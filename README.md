@@ -98,9 +98,22 @@ curl -s -X POST localhost:4774/threads \
        \"initialMessage\": {\"text\": \"Refactor auth module\"}}"
 ```
 
-The bridge POSTs a JSON payload to your URL when the thread status transitions to idle/ready (`completed`) or error (`error`). Retries 3 times with exponential backoff (1s → 5s → 15s), 10s timeout per attempt. The `metadata` object is returned unchanged in every callback.
+The bridge POSTs a JSON payload on status transitions. Retries 3x with exponential backoff (1s → 5s → 15s), 10s timeout. Each payload includes `webhookSeq` (auto-increment) and `previousStatus` for deduplication.
 
-**Webhook formats**: `"default"` (native payload) or `"openclaw-hooks"` (OpenClaw `/hooks/agent` compatible). Set via `webhook.format`.
+**Events** — granular `status:*` events or backward-compatible aliases:
+
+| Event | Fires when |
+|-------|------------|
+| `status:idle` | Agent finished, turn complete |
+| `status:ready` | Agent waiting for input |
+| `status:error` | Something went wrong |
+| `status:running` | Agent started working |
+| `completed` | Alias for `status:idle` + `status:ready` |
+| `error` | Alias for `status:error` |
+
+Use `["status:idle"]` to avoid duplicate callbacks when you only care about final completion (not `ready` pauses).
+
+**Formats**: `"default"` (native payload) or `"openclaw-hooks"` (OpenClaw `/hooks/agent` compatible). Set via `webhook.format`.
 
 ### OpenClaw integration
 

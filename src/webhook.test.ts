@@ -17,6 +17,10 @@ function makeManager(fetchFn?: FetchFn) {
   return new WebhookManager(fetchFn);
 }
 
+function parseBody(call: { init: RequestInit }) {
+  return JSON.parse(call.init.body as string) as WebhookPayload;
+}
+
 // ── Tests ────────────────────────────────────────────────────────────
 
 describe("WebhookManager", () => {
@@ -38,8 +42,8 @@ describe("WebhookManager", () => {
     });
   });
 
-  describe("onStatusChange → delivery", () => {
-    it("fires webhook on idle (completed event)", async () => {
+  describe("onStatusChange → delivery (alias events)", () => {
+    it("fires on idle via completed alias with full payload", async () => {
       const { fn, calls } = mockFetch();
       const mgr = makeManager(fn);
       mgr.register("t1", {
@@ -52,7 +56,6 @@ describe("WebhookManager", () => {
       mgr.onStatusChange("t1", "running");
       mgr.onStatusChange("t1", "idle", { messagesCount: 5 });
 
-      // Wait for async delivery.
       await new Promise((r) => setTimeout(r, 50));
 
       expect(calls.length).toBe(1);
@@ -60,13 +63,15 @@ describe("WebhookManager", () => {
       expect(call.url).toBe("http://cb.test/hook");
 
       const headers = call.init.headers as Record<string, string>;
-      expect(headers["X-T3-Event"]).toBe("completed");
+      expect(headers["X-T3-Event"]).toBe("status:idle");
       expect(headers["X-T3-Thread"]).toBe("t1");
       expect(headers["X-Custom"]).toBe("val");
       expect(headers["Content-Type"]).toBe("application/json");
 
-      const body = JSON.parse(call.init.body as string) as WebhookPayload;
-      expect(body.event).toBe("completed");
+      const body = parseBody(call);
+      expect(body.event).toBe("status:idle");
+      expect(body.webhookSeq).toBe(1);
+      expect(body.previousStatus).toBe("running");
       expect(body.threadId).toBe("t1");
       expect(body.projectId).toBe("proj-1");
       expect(body.title).toBe("My Thread");
@@ -77,7 +82,7 @@ describe("WebhookManager", () => {
       expect(body.error).toBeUndefined();
     });
 
-    it("fires webhook on ready (completed event)", async () => {
+    it("fires on ready via completed alias", async () => {
       const { fn, calls } = mockFetch();
       const mgr = makeManager(fn);
       mgr.register("t1", { url: "http://x.com", events: ["completed"] }, "p1", "T");
@@ -87,10 +92,13 @@ describe("WebhookManager", () => {
 
       await new Promise((r) => setTimeout(r, 50));
       expect(calls.length).toBe(1);
-      expect(JSON.parse(calls[0].init.body as string).status).toBe("ready");
+      const body = parseBody(calls[0]);
+      expect(body.event).toBe("status:ready");
+      expect(body.status).toBe("ready");
+      expect(body.previousStatus).toBe("running");
     });
 
-    it("fires webhook on error with error field", async () => {
+    it("fires on error via error alias", async () => {
       const { fn, calls } = mockFetch();
       const mgr = makeManager(fn);
       mgr.register("t1", { url: "http://x.com", events: ["error"] }, "p1", "T");
@@ -99,9 +107,10 @@ describe("WebhookManager", () => {
 
       await new Promise((r) => setTimeout(r, 50));
       expect(calls.length).toBe(1);
-      const body = JSON.parse(calls[0].init.body as string) as WebhookPayload;
-      expect(body.event).toBe("error");
+      const body = parseBody(calls[0]);
+      expect(body.event).toBe("status:error");
       expect(body.error).toBe("Build failed");
+      expect(body.previousStatus).toBeNull();
     });
 
     it("does not fire for unsubscribed events", async () => {
@@ -109,14 +118,13 @@ describe("WebhookManager", () => {
       const mgr = makeManager(fn);
       mgr.register("t1", { url: "http://x.com", events: ["error"] }, "p1", "T");
 
-      // completed event not in events list
       mgr.onStatusChange("t1", "idle");
 
       await new Promise((r) => setTimeout(r, 50));
       expect(calls.length).toBe(0);
     });
 
-    it("does not fire for non-trigger statuses (running, starting)", async () => {
+    it("does not fire for non-subscribed statuses (running, starting) with aliases", async () => {
       const { fn, calls } = mockFetch();
       const mgr = makeManager(fn);
       mgr.register("t1", { url: "http://x.com", events: ["completed", "error"] }, "p1", "T");
@@ -171,8 +179,114 @@ describe("WebhookManager", () => {
       mgr.onStatusChange("t1", "idle");
       await new Promise((r) => setTimeout(r, 50));
 
-      const body = JSON.parse(calls[0].init.body as string);
+      const body = parseBody(calls[0]);
       expect(body).not.toHaveProperty("metadata");
+    });
+  });
+
+  describe("granular status:* events", () => {
+    it("status:idle fires only on idle, not ready", async () => {
+      const { fn, calls } = mockFetch();
+      const mgr = makeManager(fn);
+      mgr.register("t1", { url: "http://x.com", events: ["status:idle"] }, "p1", "T");
+
+      mgr.onStatusChange("t1", "running");
+      mgr.onStatusChange("t1", "ready");
+      await new Promise((r) => setTimeout(r, 50));
+      expect(calls.length).toBe(0);
+
+      mgr.onStatusChange("t1", "running");
+      mgr.onStatusChange("t1", "idle");
+      await new Promise((r) => setTimeout(r, 50));
+      expect(calls.length).toBe(1);
+      expect(parseBody(calls[0]).event).toBe("status:idle");
+    });
+
+    it("status:ready fires only on ready, not idle", async () => {
+      const { fn, calls } = mockFetch();
+      const mgr = makeManager(fn);
+      mgr.register("t1", { url: "http://x.com", events: ["status:ready"] }, "p1", "T");
+
+      mgr.onStatusChange("t1", "idle");
+      await new Promise((r) => setTimeout(r, 50));
+      expect(calls.length).toBe(0);
+
+      mgr.onStatusChange("t1", "running");
+      mgr.onStatusChange("t1", "ready");
+      await new Promise((r) => setTimeout(r, 50));
+      expect(calls.length).toBe(1);
+      expect(parseBody(calls[0]).event).toBe("status:ready");
+    });
+
+    it("status:running fires on running transition", async () => {
+      const { fn, calls } = mockFetch();
+      const mgr = makeManager(fn);
+      mgr.register("t1", { url: "http://x.com", events: ["status:running"] }, "p1", "T");
+
+      mgr.onStatusChange("t1", "running");
+      await new Promise((r) => setTimeout(r, 50));
+      expect(calls.length).toBe(1);
+      const body = parseBody(calls[0]);
+      expect(body.event).toBe("status:running");
+      expect(body.previousStatus).toBeNull();
+    });
+
+    it("mixed granular + alias events work together", async () => {
+      const { fn, calls } = mockFetch();
+      const mgr = makeManager(fn);
+      mgr.register("t1", { url: "http://x.com", events: ["status:idle", "status:error"] }, "p1", "T");
+
+      mgr.onStatusChange("t1", "running");
+      mgr.onStatusChange("t1", "ready"); // not subscribed
+      await new Promise((r) => setTimeout(r, 50));
+      expect(calls.length).toBe(0);
+
+      mgr.onStatusChange("t1", "idle");
+      await new Promise((r) => setTimeout(r, 50));
+      expect(calls.length).toBe(1);
+
+      mgr.onStatusChange("t1", "error", { error: "crash" });
+      await new Promise((r) => setTimeout(r, 50));
+      expect(calls.length).toBe(2);
+      expect(parseBody(calls[1]).event).toBe("status:error");
+    });
+  });
+
+  describe("webhookSeq and previousStatus", () => {
+    it("increments webhookSeq across multiple deliveries", async () => {
+      const { fn, calls } = mockFetch();
+      const mgr = makeManager(fn);
+      mgr.register("t1", { url: "http://x.com", events: ["completed", "error"] }, "p1", "T");
+
+      mgr.onStatusChange("t1", "idle");
+      await new Promise((r) => setTimeout(r, 50));
+      expect(parseBody(calls[0]).webhookSeq).toBe(1);
+
+      mgr.onStatusChange("t1", "running");
+      mgr.onStatusChange("t1", "error", { error: "fail" });
+      await new Promise((r) => setTimeout(r, 50));
+      expect(parseBody(calls[1]).webhookSeq).toBe(2);
+
+      mgr.onStatusChange("t1", "idle");
+      await new Promise((r) => setTimeout(r, 50));
+      expect(parseBody(calls[2]).webhookSeq).toBe(3);
+    });
+
+    it("tracks previousStatus correctly through transitions", async () => {
+      const { fn, calls } = mockFetch();
+      const mgr = makeManager(fn);
+      mgr.register("t1", { url: "http://x.com", events: ["completed"] }, "p1", "T");
+
+      // First transition: null → idle
+      mgr.onStatusChange("t1", "idle");
+      await new Promise((r) => setTimeout(r, 50));
+      expect(parseBody(calls[0]).previousStatus).toBeNull();
+
+      // Second transition: idle → running → idle
+      mgr.onStatusChange("t1", "running");
+      mgr.onStatusChange("t1", "idle");
+      await new Promise((r) => setTimeout(r, 50));
+      expect(parseBody(calls[1]).previousStatus).toBe("running");
     });
   });
 
@@ -204,7 +318,7 @@ describe("WebhookManager", () => {
       expect(body.agentId).toBe("librus");
       expect(body.sessionKey).toBe("agent:librus:telegram:-1003643494830:6");
       expect(body.message).toContain("Fix calendar bug");
-      expect(body.message).toContain("completed");
+      expect(body.message).toContain("status:idle");
       expect(body.message).toContain("idle");
       expect(body.message).toContain("184 msgs");
       expect(body.message).toContain("host: librus");
@@ -213,7 +327,7 @@ describe("WebhookManager", () => {
       // Headers still sent
       const headers = calls[0].init.headers as Record<string, string>;
       expect(headers.Authorization).toBe("Bearer secret");
-      expect(headers["X-T3-Event"]).toBe("completed");
+      expect(headers["X-T3-Event"]).toBe("status:idle");
     });
 
     it("omits agentId and sessionKey when not in metadata", async () => {
@@ -249,7 +363,7 @@ describe("WebhookManager", () => {
       await new Promise((r) => setTimeout(r, 50));
 
       const body = JSON.parse(calls[0].init.body as string);
-      expect(body.message).toContain("error");
+      expect(body.message).toContain("status:error");
       expect(body.message).toContain("Build failed after 3 retries");
       expect(body.name).toBe("t3code:Broken build");
     });
@@ -265,9 +379,8 @@ describe("WebhookManager", () => {
       mgr.onStatusChange("t1", "idle");
       await new Promise((r) => setTimeout(r, 50));
 
-      // Default format = native WebhookPayload
       const body = JSON.parse(calls[0].init.body as string);
-      expect(body.event).toBe("completed");
+      expect(body.event).toBe("status:idle");
       expect(body.threadId).toBe("t1");
       expect(body).not.toHaveProperty("wakeMode");
     });
@@ -286,9 +399,6 @@ describe("WebhookManager", () => {
       mgr.register("t1", { url: "http://x.com", events: ["completed"] }, "p1", "T");
       mgr.onStatusChange("t1", "idle");
 
-      // Wait for retries (1s + 5s + 15s max, but with mock it's instant — except the sleep).
-      // We can't easily test real delays, but we verify the fetch was called 4 times (1 + 3 retries).
-      // For this test we need to bypass the sleep. Let's just verify it attempts multiple times.
       await new Promise((r) => setTimeout(r, 25_000));
       expect(attempt).toBe(4);
     }, 30_000);

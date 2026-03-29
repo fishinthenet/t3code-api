@@ -12,9 +12,11 @@ export interface WebhookConfig {
 
 export interface WebhookPayload {
   event: string;
+  webhookSeq: number;
   threadId: string;
   projectId: string;
   title: string;
+  previousStatus: string | null;
   status: string;
   durationMs: number;
   messagesCount: number;
@@ -22,12 +24,21 @@ export interface WebhookPayload {
   error?: string;
 }
 
+/** Expand aliases to granular status:* events. */
+const ALIASES: Record<string, string[]> = {
+  completed: ["status:ready", "status:idle"],
+  error: ["status:error"],
+};
+
 interface ThreadState {
   config: WebhookConfig;
+  /** Expanded set of granular events this webhook listens for. */
+  expandedEvents: Set<string>;
   projectId: string;
   title: string;
   createdAt: number;
   lastStatus: string | null;
+  webhookSeq: number;
   /** Queued deliveries, processed in order. */
   queue: Array<() => Promise<void>>;
   processing: boolean;
@@ -53,15 +64,26 @@ export class WebhookManager {
     projectId: string,
     title: string,
   ) {
+    const events = config.events?.length ? config.events : ["completed", "error"];
+    // Expand aliases into granular status:* events.
+    const expanded = new Set<string>();
+    for (const e of events) {
+      const aliases = ALIASES[e];
+      if (aliases) {
+        for (const a of aliases) expanded.add(a);
+      } else {
+        expanded.add(e);
+      }
+    }
+
     this.threads.set(threadId, {
-      config: {
-        ...config,
-        events: config.events?.length ? config.events : ["completed", "error"],
-      },
+      config: { ...config, events },
+      expandedEvents: expanded,
       projectId,
       title,
       createdAt: Date.now(),
       lastStatus: null,
+      webhookSeq: 0,
       queue: [],
       processing: false,
     });
@@ -84,7 +106,7 @@ export class WebhookManager {
 
   /**
    * Called on every status change. Determines whether to fire a webhook
-   * based on the event mapping and status transition.
+   * based on the granular event and subscription matching.
    */
   onStatusChange(
     threadId: string,
@@ -94,20 +116,23 @@ export class WebhookManager {
     const state = this.threads.get(threadId);
     if (!state) return;
 
-    // Avoid firing on same status repeatedly.
+    // Only fire on actual status transitions.
     if (state.lastStatus === newStatus) return;
-    const prevStatus = state.lastStatus;
+    const previousStatus = state.lastStatus;
     state.lastStatus = newStatus;
 
-    const event = this.mapStatusToEvent(newStatus, prevStatus);
-    if (!event) return;
-    if (!state.config.events.includes(event)) return;
+    const event = `status:${newStatus}`;
+    if (!state.expandedEvents.has(event)) return;
+
+    state.webhookSeq++;
 
     const payload: WebhookPayload = {
       event,
+      webhookSeq: state.webhookSeq,
       threadId,
       projectId: state.projectId,
       title: state.title,
+      previousStatus,
       status: newStatus,
       durationMs: Date.now() - state.createdAt,
       messagesCount: extra?.messagesCount ?? 0,
@@ -118,21 +143,6 @@ export class WebhookManager {
     // Enqueue delivery to guarantee in-order per thread.
     state.queue.push(() => this.deliver(state.config, payload, threadId));
     this.processQueue(state);
-  }
-
-  private mapStatusToEvent(
-    status: string,
-    _prev: string | null,
-  ): string | null {
-    switch (status) {
-      case "idle":
-      case "ready":
-        return "completed";
-      case "error":
-        return "error";
-      default:
-        return null;
-    }
   }
 
   private async processQueue(state: ThreadState) {
