@@ -2,35 +2,56 @@
 
 ## What is this
 
-REST API at `http://t3code:4774` that lets you dispatch coding tasks to agents (Codex/Claude) and get a callback when they finish.
+REST API at `http://t3code:4774` that lets you dispatch coding tasks to agents (Codex/Claude) and get a callback when they finish. The callback wakes an OpenClaw agent in the correct chat/topic.
 
-## Prerequisites: OpenClaw gateway configuration
+## OpenClaw configuration
 
-The OpenClaw gateway must have hooks enabled with the right session policy. In your OpenClaw config:
+### Hook mapping
+
+OpenClaw has two kinds of hook endpoints:
+- **Built-in** (`/hooks/agent`, `/hooks/wake`) — hardcoded handlers with their own validation, no mapping support
+- **Custom paths** (`/hooks/t3code`, `/hooks/anything`) — routed through **mappings** with template interpolation, `deliver`, `channel`, `to`
+
+For t3code callbacks, use a **custom path with a mapping**:
 
 ```yaml
 hooks:
   enabled: true
   token: "<your-secret-token>"
-  allowRequestSessionKey: true
-  allowedSessionKeyPrefixes: ["agent:"]
+  mappings:
+    - id: t3code
+      match:
+        path: t3code                    # matches POST /hooks/t3code
+      action: agent
+      agentId: my-agent                 # must exist in agents.list
+      messageTemplate: "{{message}}"    # extracts message from payload
+      deliver: true                     # post result to channel
+      channel: telegram                 # delivery channel
+      to: "-100123456789:1"             # chat_id:topic_id
 ```
 
-| Setting | Required | Why |
-|---------|----------|-----|
-| `hooks.enabled` | **yes** | Enables the `/hooks/agent` endpoint |
-| `hooks.token` | **yes** | Bearer token for authenticating webhook requests |
-| `hooks.allowRequestSessionKey` | **yes** | Without this, OpenClaw rejects any `sessionKey` in the request body (returns 400) |
-| `hooks.allowedSessionKeyPrefixes` | recommended | Restricts which session keys callers can target. Use `["agent:"]` to allow agent-scoped keys like `agent:my-agent:telegram:...` |
+### Mapping fields
 
-The `agentId` sent in the webhook must match a known agent in your OpenClaw config (listed under `agents.list`). If it doesn't match, OpenClaw routes to the default agent instead.
+| Field | Required | Purpose |
+|-------|----------|---------|
+| `match.path` | **yes** | URL path segment after `/hooks/` (e.g. `t3code` matches `/hooks/t3code`) |
+| `action` | no | `"agent"` (default) or `"wake"`. Agent runs an agent turn; wake just enqueues a notification |
+| `agentId` | yes | Which OpenClaw agent handles the callback. Must be in `agents.list` config |
+| `messageTemplate` | yes | Template for the agent message. `{{message}}` extracts the `message` field from the POST body |
+| `deliver` | **yes** | Must be `true` to post the result to a channel |
+| `channel` | **yes** | Target channel: `telegram`, `discord`, `whatsapp`, etc. |
+| `to` | **yes** | Destination in that channel. For Telegram: `chat_id:topic_id` (e.g. `-100123456789:362`) |
+
+> **Why not `/hooks/agent`?** The `/hooks/agent` endpoint has its own validation and ignores mappings. It requires `allowRequestSessionKey: true` and `sessionKey`-based routing which is harder to set up. The mapping approach is simpler and more flexible.
+
+> **Template interpolation** works in `messageTemplate`, `sessionKey`, `textTemplate` — any mapping string field supports `{{payload.field}}` syntax. However, hardcoded values (e.g. `to`, `channel`) are often simpler and more reliable than templates.
 
 ## Flow in 3 steps
 
 ### 1. Get `projectId`
 
 ```bash
-curl -s http://t3code:4774/snapshot | jq -r '.projects[0].projectId'
+curl -s http://t3code:4774/snapshot | jq -r '.projects[0].id'
 ```
 
 ### 2. Create a thread with a task and webhook
@@ -42,13 +63,11 @@ curl -s -X POST http://t3code:4774/threads \
     "projectId": "<PROJECT_ID>",
     "initialMessage": { "text": "Fix the calendar bug" },
     "webhook": {
-      "url": "http://your-openclaw-host:18789/hooks/agent",
+      "url": "http://your-openclaw-host:18789/hooks/t3code",
       "format": "openclaw-hooks",
       "events": ["completed", "error"],
       "headers": { "Authorization": "Bearer <OPENCLAW_TOKEN>" },
       "metadata": {
-        "agentId": "my-agent",
-        "sessionKey": "agent:my-agent:telegram:-100123456789:1",
         "host": "my-agent"
       }
     }
@@ -57,29 +76,27 @@ curl -s -X POST http://t3code:4774/threads \
 
 Returns: `{ "threadId": "...", "messageId": "..." }`
 
-### 3. Agent codes -> bridge fires callback -> OpenClaw wakes the agent
+### 3. Agent codes → bridge fires callback → OpenClaw delivers notification
 
-No polling needed. When the agent finishes (status `idle`/`ready`) or hits an error, the bridge POSTs to OpenClaw automatically:
+No polling needed. When the agent finishes (status `idle`/`ready`) or hits an error, the bridge POSTs to your custom hook path:
 
 ```json
 {
-  "message": "Fix the calendar bug: status:idle (24 msgs, 38s)",
+  "message": "🔔 t3code: \"Fix the calendar bug\" — status:idle (idle, 24 msgs, 38s)\nthreadId: abc-123\nhost: my-agent",
   "wakeMode": "now",
-  "name": "t3code:Fix the calendar bug",
-  "agentId": "my-agent",
-  "sessionKey": "agent:my-agent:telegram:-100123456789:1"
+  "name": "t3code:Fix the calendar bug"
 }
 ```
 
-OpenClaw parses the `sessionKey`, strips the `agent:my-agent:` prefix (since it matches `agentId`), and routes the notification to the `telegram:-100123456789:1` session — waking the agent in the correct chat.
+OpenClaw matches the path `t3code` → runs the mapping → agent processes the notification → result is delivered to the configured Telegram chat/topic.
 
-## Metadata keys
+## Webhook metadata
 
 | Key | Required | Purpose |
 |-----|----------|---------|
-| `sessionKey` | **yes** | Identifies the chat session to wake. Format: `agent:<agentId>:<channel>:<chat_id>:<topic_id>`. OpenClaw strips the `agent:<agentId>:` prefix before routing. |
-| `agentId` | yes | Agent name in OpenClaw. Must be listed in `agents.list` config, otherwise falls back to default agent. |
-| `host` | no | Appears in the notification message text |
+| `host` | no | Included in the notification message text (identifies which host ran the task) |
+
+> Note: `agentId` and `sessionKey` are **not needed** in metadata when using mappings — the mapping config defines routing.
 
 ## Optional: read results after callback
 
@@ -99,18 +116,51 @@ curl -s "http://t3code:4774/threads/<THREAD_ID>/diff"
 - `runtimeMode`: `"full-access"` (default) or `"approval-required"`
 - `workdir`: absolute path to working directory (optional)
 
+## Multiple channels
+
+To deliver to different chats/topics, create separate mappings per destination:
+
+```yaml
+hooks:
+  enabled: true
+  token: "<your-secret-token>"
+  mappings:
+    - id: t3code-main
+      match:
+        path: t3code-main
+      action: agent
+      agentId: my-agent
+      messageTemplate: "{{message}}"
+      deliver: true
+      channel: telegram
+      to: "-100123456789:1"
+
+    - id: t3code-dev
+      match:
+        path: t3code-dev
+      action: agent
+      agentId: dev-agent
+      messageTemplate: "{{message}}"
+      deliver: true
+      channel: telegram
+      to: "-100987654321:42"
+```
+
+Then point each thread's webhook URL at the appropriate path (`/hooks/t3code-main` or `/hooks/t3code-dev`).
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| Bridge logs `returned 400` | `hooks.allowRequestSessionKey` is `false` (default) | Set `hooks.allowRequestSessionKey: true` in OpenClaw config |
-| Callback arrives but wrong agent responds | `agentId` not in OpenClaw's `agents.list` | Add the agent to config or use the correct `agentId` |
-| Callback arrives but no notification | `sessionKey` doesn't match an active session | Verify the session key matches the current chat (channel, chat_id, topic_id) |
+| OpenClaw returns 404 | No mapping matches the path | Check `match.path` matches the URL path segment |
+| OpenClaw returns 401 | Wrong or missing token | Check `Authorization: Bearer <token>` matches `hooks.token` |
+| Callback arrives but no notification | `deliver` is `false` or missing `to` | Set `deliver: true` and `to: "<destination>"` in the mapping |
+| Wrong agent responds | `agentId` not in `agents.list` | Add the agent to config or use the correct `agentId` |
 | Bridge logs `ECONNREFUSED` | OpenClaw gateway unreachable | Check that the gateway is running and the URL/port is correct |
-| No webhook logs at all | Bridge version < 0.0.15 (no webhook support) | Check `GET /health` returns `version: "0.0.19"` or later |
+| No webhook logs at all | Bridge too old | Check `GET /health` returns `version: "0.0.20"` or later |
 
 ## Important
 
 - Webhook config lives **in bridge memory** — lost on restart.
 - `wakeMode` is always `"now"` (immediate delivery). OpenClaw also supports `"next-heartbeat"` but the bridge doesn't expose this.
-- Retry: 3 attempts with backoff (1s -> 5s -> 15s), 10s timeout per attempt.
+- Retry: 3 attempts with backoff (1s → 5s → 15s), 10s timeout per attempt.

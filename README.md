@@ -116,28 +116,27 @@ The bridge POSTs a JSON payload on status transitions. Each payload includes a h
 
 Use `["status:idle"]` to avoid duplicate callbacks when you only care about final completion (not `ready` pauses).
 
-**Formats**: `"default"` (native payload) or `"openclaw-hooks"` (OpenClaw `/hooks/agent` compatible). Set via `webhook.format`.
+**Formats**: `"default"` (native payload) or `"openclaw-hooks"` (OpenClaw hooks compatible). Set via `webhook.format`.
 
 ### OpenClaw integration
 
-With `format: "openclaw-hooks"`, the bridge transforms callbacks into OpenClaw `/hooks/agent` payloads — the agent gets notified in its Telegram/Discord session when a coding task finishes:
+With `format: "openclaw-hooks"`, the bridge transforms callbacks for OpenClaw's hook mapping system. Configure a custom path mapping in OpenClaw to route notifications to the correct chat/topic:
 
 ```
   OpenClaw gateway              t3code-api                T3 Code
        │                            │                        │
        │  POST /threads             │                        │
-       │  webhook.format=           │                        │
-       │    "openclaw-hooks"        │   WS: thread.create    │
-       │  metadata.sessionKey=...   │───────────────────────►│
+       │  webhook.url=              │   WS: thread.create    │
+       │    /hooks/t3code           │───────────────────────►│
        │───────────────────────────►│                        │
        │                            │   push: domain events  │
        │                            │◄───────────────────────│
        │                            │                        │
-       │   POST /hooks/agent        │   status → idle        │
-       │   {message, sessionKey,    │◄───────────────────────│
-       │    agentId, wakeMode}      │                        │
+       │   POST /hooks/t3code       │   status → idle        │
+       │   {message, wakeMode,      │◄───────────────────────│
+       │    name}                   │                        │
        │◄───────────────────────────│                        │
-       │                            │                        │
+       │  mapping: deliver→chat     │                        │
        ▼ notifies user in chat      │                        │
 ```
 
@@ -146,18 +145,16 @@ curl -s -X POST localhost:4774/threads \
   -H 'Content-Type: application/json' \
   -d "{\"projectId\": \"$PROJECT\",
        \"webhook\": {
-         \"url\": \"http://your-openclaw-host:18789/hooks/agent\",
+         \"url\": \"http://your-openclaw-host:18789/hooks/t3code\",
          \"format\": \"openclaw-hooks\",
          \"headers\": {\"Authorization\": \"Bearer token\"},
          \"events\": [\"completed\", \"error\"],
-         \"metadata\": {
-           \"agentId\": \"my-agent\",
-           \"sessionKey\": \"agent:my-agent:telegram:-100123456789:1\",
-           \"host\": \"my-agent\"
-         }
+         \"metadata\": {\"host\": \"my-agent\"}
        },
        \"initialMessage\": {\"text\": \"Fix the calendar bug\"}}"
 ```
+
+See [docs/openclaw-flow.md](docs/openclaw-flow.md) for full setup including OpenClaw mapping configuration.
 
 ## Architecture
 
