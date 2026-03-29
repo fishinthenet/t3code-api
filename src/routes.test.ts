@@ -311,5 +311,203 @@ describe("routes", () => {
       const res = await json(app, "/threads/tid-1/status");
       expect(res.body.status).toBeNull();
     });
+
+    it("hydrates from snapshot when thread not in buffer", async () => {
+      const ws = createMockWs();
+      (ws.request as ReturnType<typeof mock>).mockImplementation(
+        (tag: string) => {
+          if (tag === "orchestration.getSnapshot") {
+            return Promise.resolve({
+              snapshotSequence: 50,
+              threads: [
+                {
+                  id: "tid-hydrate",
+                  messages: [],
+                  session: { status: "idle" },
+                },
+              ],
+            });
+          }
+          return Promise.resolve({});
+        },
+      );
+      const events = new EventBuffer();
+      const app = createRoutes({ ws, events });
+
+      const res = await json(app, "/threads/tid-hydrate/status");
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe("idle");
+    });
+  });
+
+  describe("GET /threads/:id/messages — snapshot hydration", () => {
+    it("hydrates messages from snapshot when thread not in buffer", async () => {
+      const ws = createMockWs();
+      (ws.request as ReturnType<typeof mock>).mockImplementation(
+        (tag: string) => {
+          if (tag === "orchestration.getSnapshot") {
+            return Promise.resolve({
+              snapshotSequence: 100,
+              threads: [
+                {
+                  id: "tid-snap",
+                  messages: [
+                    {
+                      id: "m1",
+                      role: "user",
+                      text: "From snapshot",
+                      turnId: null,
+                      streaming: false,
+                      createdAt: "2026-03-27T12:00:00Z",
+                      updatedAt: "2026-03-27T12:00:00Z",
+                    },
+                    {
+                      id: "m2",
+                      role: "assistant",
+                      text: "Snapshot reply",
+                      turnId: "turn-1",
+                      streaming: false,
+                      createdAt: "2026-03-27T12:00:01Z",
+                      updatedAt: "2026-03-27T12:00:05Z",
+                    },
+                  ],
+                  session: { status: "idle" },
+                },
+              ],
+            });
+          }
+          return Promise.resolve({});
+        },
+      );
+      const events = new EventBuffer();
+      const app = createRoutes({ ws, events });
+
+      const res = await json(app, "/threads/tid-snap/messages");
+      expect(res.status).toBe(200);
+
+      const msgs = res.body.messages as Array<Record<string, unknown>>;
+      expect(msgs).toHaveLength(2);
+      expect(msgs[0].text).toBe("From snapshot");
+      expect(msgs[0].role).toBe("user");
+      expect(msgs[1].text).toBe("Snapshot reply");
+      expect(msgs[1].role).toBe("assistant");
+    });
+
+    it("does not re-hydrate when thread already has live events", async () => {
+      const ws = createMockWs();
+      (ws.request as ReturnType<typeof mock>).mockImplementation(
+        (tag: string) => {
+          if (tag === "orchestration.getSnapshot") {
+            return Promise.resolve({
+              threads: [
+                {
+                  id: "tid-live",
+                  messages: [
+                    {
+                      id: "old",
+                      role: "user",
+                      text: "Old snapshot",
+                      turnId: null,
+                      streaming: false,
+                      createdAt: "2026-03-27T10:00:00Z",
+                      updatedAt: "2026-03-27T10:00:00Z",
+                    },
+                  ],
+                },
+              ],
+            });
+          }
+          return Promise.resolve({});
+        },
+      );
+      const events = new EventBuffer();
+      const app = createRoutes({ ws, events });
+
+      // Push a live event first
+      events.push({
+        sequence: 1,
+        eventId: "e1",
+        type: "thread.message-sent",
+        aggregateId: "tid-live",
+        occurredAt: new Date().toISOString(),
+        payload: {
+          threadId: "tid-live",
+          messageId: "live-msg",
+          role: "user",
+          text: "Live message",
+          streaming: false,
+          turnId: "turn-1",
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      });
+
+      const res = await json(app, "/threads/tid-live/messages");
+      const msgs = res.body.messages as Array<Record<string, unknown>>;
+      expect(msgs).toHaveLength(1);
+      expect(msgs[0].text).toBe("Live message");
+    });
+
+    it("handles snapshot failure gracefully", async () => {
+      const ws = createMockWs();
+      (ws.request as ReturnType<typeof mock>).mockImplementation(
+        (tag: string) => {
+          if (tag === "orchestration.getSnapshot") {
+            return Promise.reject(new Error("Connection lost"));
+          }
+          return Promise.resolve({});
+        },
+      );
+      const events = new EventBuffer();
+      const app = createRoutes({ ws, events });
+
+      const res = await json(app, "/threads/tid-missing/messages");
+      expect(res.status).toBe(200);
+      expect((res.body.messages as unknown[]).length).toBe(0);
+    });
+  });
+
+  describe("GET /snapshot", () => {
+    it("returns raw snapshot from ws", async () => {
+      const ws = createMockWs();
+      const snapshotData = { snapshotSequence: 42, threads: [] };
+      (ws.request as ReturnType<typeof mock>).mockImplementation(() =>
+        Promise.resolve(snapshotData),
+      );
+      const events = new EventBuffer();
+      const app = createRoutes({ ws, events });
+
+      const res = await json(app, "/snapshot");
+      expect(res.status).toBe(200);
+      expect(res.body.snapshotSequence).toBe(42);
+    });
+  });
+
+  describe("GET /threads/:id/events", () => {
+    it("returns filtered events", async () => {
+      const { app, events } = makeApp();
+      events.push({
+        sequence: 1,
+        eventId: "e1",
+        type: "thread.created",
+        aggregateId: "tid-1",
+        occurredAt: new Date().toISOString(),
+        payload: { threadId: "tid-1" },
+      });
+      events.push({
+        sequence: 2,
+        eventId: "e2",
+        type: "thread.session-set",
+        aggregateId: "tid-1",
+        occurredAt: new Date().toISOString(),
+        payload: { threadId: "tid-1", session: { status: "running" } },
+      });
+
+      const res = await json(app, "/threads/tid-1/events?types=thread.session-set");
+      expect(res.status).toBe(200);
+      const evts = res.body.events as Array<Record<string, unknown>>;
+      expect(evts).toHaveLength(1);
+      expect(evts[0].type).toBe("thread.session-set");
+    });
   });
 });
