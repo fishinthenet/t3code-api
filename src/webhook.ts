@@ -195,18 +195,30 @@ export class WebhookManager {
 
         clearTimeout(timeout);
 
-        if (res.status >= 200 && res.status < 300) return; // Success
+        if (res.status >= 200 && res.status < 300) {
+          console.log(`[webhook] Delivered ${payload.event} seq=${payload.webhookSeq} to ${config.url} (thread=${threadId})`);
+          return;
+        }
 
-        // Non-2xx — retry if attempts remain.
-      } catch {
-        // Network error or timeout — retry if attempts remain.
+        // Non-2xx — log and retry if attempts remain.
+        let responseBody = "";
+        try { responseBody = await res.text(); } catch { /* ignore */ }
+        console.warn(
+          `[webhook] ${config.url} returned ${res.status} for ${payload.event} seq=${payload.webhookSeq} (thread=${threadId}, attempt=${attempt + 1}/${RETRY_DELAYS_MS.length + 1})`,
+          responseBody ? `— body: ${responseBody.slice(0, 200)}` : "",
+        );
+      } catch (err) {
+        console.warn(
+          `[webhook] ${config.url} failed for ${payload.event} seq=${payload.webhookSeq} (thread=${threadId}, attempt=${attempt + 1}/${RETRY_DELAYS_MS.length + 1}):`,
+          err instanceof Error ? err.message : err,
+        );
       }
 
       if (attempt < RETRY_DELAYS_MS.length) {
         await sleep(RETRY_DELAYS_MS[attempt]);
       }
     }
-    // All retries exhausted — silently give up.
+    console.error(`[webhook] Exhausted ${RETRY_DELAYS_MS.length + 1} attempts for ${payload.event} seq=${payload.webhookSeq} → ${config.url} (thread=${threadId})`);
   }
 }
 
