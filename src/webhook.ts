@@ -13,6 +13,7 @@ export interface WebhookConfig {
 export interface WebhookPayload {
   event: string;
   webhookSeq: number;
+  message: string;
   threadId: string;
   projectId: string;
   title: string;
@@ -126,16 +127,23 @@ export class WebhookManager {
 
     state.webhookSeq++;
 
+    const durationMs = Date.now() - state.createdAt;
+    const messagesCount = extra?.messagesCount ?? 0;
+    const durationSec = Math.round(durationMs / 1000);
+    const errorSuffix = extra?.error ? ` — ${extra.error}` : "";
+    const message = `${state.title}: ${event} (${messagesCount} msgs, ${durationSec}s)${errorSuffix}`;
+
     const payload: WebhookPayload = {
       event,
       webhookSeq: state.webhookSeq,
+      message,
       threadId,
       projectId: state.projectId,
       title: state.title,
       previousStatus,
       status: newStatus,
-      durationMs: Date.now() - state.createdAt,
-      messagesCount: extra?.messagesCount ?? 0,
+      durationMs,
+      messagesCount,
       ...(state.config.metadata ? { metadata: state.config.metadata } : {}),
       ...(extra?.error ? { error: extra.error } : {}),
     };

@@ -98,7 +98,7 @@ curl -s -X POST localhost:4774/threads \
        \"initialMessage\": {\"text\": \"Refactor auth module\"}}"
 ```
 
-The bridge POSTs a JSON payload on status transitions. Retries 3x with exponential backoff (1s → 5s → 15s), 10s timeout. Each payload includes `webhookSeq` (auto-increment) and `previousStatus` for deduplication.
+The bridge POSTs a JSON payload on status transitions. Each payload includes a human-readable `message` field (e.g. `"Fix bug: status:idle (12 msgs, 42s)"`), `webhookSeq` (auto-increment), and `previousStatus` for deduplication. Retries 3x with exponential backoff (1s → 5s → 15s), 10s timeout.
 
 **Events** — granular `status:*` events or backward-compatible aliases:
 

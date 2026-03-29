@@ -71,6 +71,9 @@ describe("WebhookManager", () => {
       const body = parseBody(call);
       expect(body.event).toBe("status:idle");
       expect(body.webhookSeq).toBe(1);
+      expect(body.message).toContain("My Thread");
+      expect(body.message).toContain("status:idle");
+      expect(body.message).toContain("5 msgs");
       expect(body.previousStatus).toBe("running");
       expect(body.threadId).toBe("t1");
       expect(body.projectId).toBe("proj-1");
@@ -98,7 +101,7 @@ describe("WebhookManager", () => {
       expect(body.previousStatus).toBe("running");
     });
 
-    it("fires on error via error alias", async () => {
+    it("fires on error via error alias with error in message", async () => {
       const { fn, calls } = mockFetch();
       const mgr = makeManager(fn);
       mgr.register("t1", { url: "http://x.com", events: ["error"] }, "p1", "T");
@@ -110,6 +113,7 @@ describe("WebhookManager", () => {
       const body = parseBody(calls[0]);
       expect(body.event).toBe("status:error");
       expect(body.error).toBe("Build failed");
+      expect(body.message).toContain("Build failed");
       expect(body.previousStatus).toBeNull();
     });
 
@@ -382,6 +386,8 @@ describe("WebhookManager", () => {
       const body = JSON.parse(calls[0].init.body as string);
       expect(body.event).toBe("status:idle");
       expect(body.threadId).toBe("t1");
+      expect(body.message).toContain("T");
+      expect(body.message).toContain("status:idle");
       expect(body).not.toHaveProperty("wakeMode");
     });
   });

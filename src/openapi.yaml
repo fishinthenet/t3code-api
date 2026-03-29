@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: t3code-api
   description: REST bridge for T3 Code — control coding agent sessions over plain HTTP.
-  version: 0.0.17
+  version: 0.0.18
 
 servers:
   - url: http://localhost:4774
@@ -551,7 +551,7 @@ components:
 
     WebhookPayload:
       type: object
-      required: [event, webhookSeq, threadId, projectId, title, previousStatus, status, durationMs, messagesCount]
+      required: [event, webhookSeq, message, threadId, projectId, title, previousStatus, status, durationMs, messagesCount]
       description: |
         Payload POSTed to the webhook URL. Sent with headers:
         - `Content-Type: application/json`
@@ -566,6 +566,12 @@ components:
         webhookSeq:
           type: integer
           description: Auto-incrementing sequence number per thread (1, 2, 3...). Useful for deduplication and ordering.
+        message:
+          type: string
+          description: |
+            Human-readable summary of the event, e.g. `"Fix calendar bug: status:idle (184 msgs, 42s)"`.
+            Includes error text for error events. Useful for Slack, Discord, or any consumer that
+            needs a ready-to-display notification.
         threadId:
           type: string
           format: uuid
