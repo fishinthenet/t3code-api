@@ -1,6 +1,6 @@
 /**
  * Persistent WebSocket client to T3 Code server.
- * Maintains connection with auto-reconnect and request/response matching.
+ * Maintains connection with auto-reconnect, heartbeat, and request/response matching.
  */
 
 type PendingRequest = {
@@ -16,15 +16,20 @@ export type PushHandler = (msg: {
   data: unknown;
 }) => void;
 
+const HEARTBEAT_INTERVAL_MS = 10_000;
+const HEARTBEAT_TIMEOUT_MS = 5_000;
+
 export class T3WebSocketClient {
   private ws: WebSocket | null = null;
   private nextId = 1;
   private readonly pending = new Map<string, PendingRequest>();
   private readonly queue: string[] = [];
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempt = 0;
   private disposed = false;
   private _connected = false;
+  private lastMessageAt = 0;
 
   onPush: PushHandler | null = null;
   onConnected: (() => void) | null = null;
@@ -42,7 +47,8 @@ export class T3WebSocketClient {
   }
 
   request<T = unknown>(tag: string, params: Record<string, unknown> = {}): Promise<T> {
-    if (!this._connected) {
+    if (!this._connected || this.ws?.readyState !== WebSocket.OPEN) {
+      this._connected = false;
       return Promise.reject(new Error(`WebSocket not connected — cannot send ${tag}`));
     }
     return new Promise((resolve, reject) => {
@@ -59,6 +65,7 @@ export class T3WebSocketClient {
 
   dispose() {
     this.disposed = true;
+    this.stopHeartbeat();
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     for (const [, p] of this.pending) {
       clearTimeout(p.timer);
@@ -76,12 +83,15 @@ export class T3WebSocketClient {
 
     ws.addEventListener("open", () => {
       this._connected = true;
+      this.lastMessageAt = Date.now();
       this.reconnectAttempt = 0;
       this.flushQueue();
+      this.startHeartbeat();
       this.onConnected?.();
     });
 
     ws.addEventListener("message", (event) => {
+      this.lastMessageAt = Date.now();
       try {
         const raw = String(event.data);
         const msg = JSON.parse(raw);
@@ -103,22 +113,15 @@ export class T3WebSocketClient {
             } else {
               p.resolve(msg.result);
             }
-          } else {
-            console.warn(`[ws] No pending request for id=${msg.id}`, raw.slice(0, 200));
           }
-        } else {
-          console.warn(`[ws] Unrecognized message (no id, no push)`, raw.slice(0, 200));
         }
-      } catch (err) {
-        console.warn(`[ws] Failed to parse message`, String(event.data).slice(0, 200), err);
+      } catch {
+        // Ignore malformed messages
       }
     });
 
     ws.addEventListener("close", () => {
-      this._connected = false;
-      this.ws = null;
-      this.onDisconnected?.();
-      this.scheduleReconnect();
+      this.handleDisconnect();
     });
 
     ws.addEventListener("error", () => {
@@ -128,12 +131,25 @@ export class T3WebSocketClient {
     this.ws = ws;
   }
 
+  private handleDisconnect() {
+    if (!this._connected && this.ws === null) return; // Already handled
+    this._connected = false;
+    this.stopHeartbeat();
+    this.ws = null;
+    // Reject all pending requests immediately
+    for (const [id, p] of this.pending) {
+      clearTimeout(p.timer);
+      p.reject(new Error("WebSocket connection lost"));
+      this.pending.delete(id);
+    }
+    this.onDisconnected?.();
+    this.scheduleReconnect();
+  }
+
   private send(data: string) {
     if (this.ws?.readyState === WebSocket.OPEN) {
-      console.log(`[ws] → ${data.slice(0, 300)}`);
       this.ws.send(data);
     } else {
-      console.log(`[ws] queued (not connected): ${data.slice(0, 200)}`);
       this.queue.push(data);
     }
   }
@@ -141,6 +157,58 @@ export class T3WebSocketClient {
   private flushQueue() {
     while (this.queue.length > 0 && this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(this.queue.shift()!);
+    }
+  }
+
+  private startHeartbeat() {
+    this.stopHeartbeat();
+    this.heartbeatTimer = setInterval(() => {
+      if (!this._connected || !this.ws) return;
+
+      // If readyState isn't OPEN, the socket is dead
+      if (this.ws.readyState !== WebSocket.OPEN) {
+        console.warn(`[ws] Heartbeat: readyState=${this.ws.readyState}, forcing reconnect`);
+        this.ws.close();
+        this.handleDisconnect();
+        return;
+      }
+
+      // If no message received for too long, probe with a lightweight request
+      const silenceMs = Date.now() - this.lastMessageAt;
+      if (silenceMs > HEARTBEAT_INTERVAL_MS) {
+        const probeId = `hb-${Date.now()}`;
+        const probeTimeout = setTimeout(() => {
+          if (this.pending.has(probeId)) {
+            this.pending.delete(probeId);
+            console.warn(`[ws] Heartbeat probe timed out after ${HEARTBEAT_TIMEOUT_MS}ms, forcing reconnect`);
+            this.ws?.close();
+            this.handleDisconnect();
+          }
+        }, HEARTBEAT_TIMEOUT_MS);
+
+        this.pending.set(probeId, {
+          resolve: () => {
+            clearTimeout(probeTimeout);
+            this.pending.delete(probeId);
+          },
+          reject: () => {
+            clearTimeout(probeTimeout);
+            this.pending.delete(probeId);
+          },
+          timer: probeTimeout,
+        });
+
+        this.send(
+          JSON.stringify({ id: probeId, body: { _tag: "orchestration.getSnapshot" } }),
+        );
+      }
+    }, HEARTBEAT_INTERVAL_MS);
+  }
+
+  private stopHeartbeat() {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
     }
   }
 
