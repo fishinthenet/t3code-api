@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: t3code-api
   description: REST bridge for T3 Code — control coding agent sessions over plain HTTP.
-  version: 0.1.0
+  version: 0.0.14
 
 servers:
   - url: http://localhost:4774
@@ -370,6 +370,8 @@ components:
               description: Optional image attachments (see Attachment schema).
               items:
                 $ref: "#/components/schemas/Attachment"
+        webhook:
+          $ref: "#/components/schemas/WebhookConfig"
 
     SendMessageRequest:
       type: object
@@ -495,6 +497,76 @@ components:
           type: string
           format: date-time
           description: Timestamp of the latest update to this message.
+
+    WebhookConfig:
+      type: object
+      required: [url]
+      description: |
+        Optional webhook configuration. When set, the bridge POSTs a JSON payload to `url`
+        when the thread's status matches one of the subscribed events.
+        Retries 3 times with exponential backoff (1s → 5s → 15s), 10s timeout per attempt.
+      properties:
+        url:
+          type: string
+          format: uri
+          description: Callback URL — receives POST requests with `WebhookPayload`.
+        events:
+          type: array
+          items:
+            type: string
+            enum: [completed, error]
+          default: [completed, error]
+          description: |
+            Which events to fire. Defaults to `["completed", "error"]`.
+            - `completed` — thread status transitions to `idle` or `ready` (agent finished).
+            - `error` — thread status transitions to `error`.
+        headers:
+          type: object
+          additionalProperties:
+            type: string
+          description: Extra headers sent with every callback (e.g. `{"Authorization": "Bearer xxx"}`).
+        metadata:
+          type: object
+          description: Arbitrary JSON returned unchanged in every callback payload.
+
+    WebhookPayload:
+      type: object
+      required: [event, threadId, projectId, title, status, durationMs, messagesCount]
+      description: |
+        Payload POSTed to the webhook URL. Sent with headers:
+        - `Content-Type: application/json`
+        - `X-T3-Event: <event>`
+        - `X-T3-Thread: <threadId>`
+        - Plus any custom headers from the webhook config.
+      properties:
+        event:
+          type: string
+          enum: [completed, error]
+          description: The webhook event that triggered this callback.
+        threadId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        title:
+          type: string
+          description: Thread title.
+        status:
+          type: string
+          description: "Current thread status (e.g. `idle`, `ready`, `error`)."
+        durationMs:
+          type: integer
+          description: Milliseconds since thread creation.
+        messagesCount:
+          type: integer
+          description: Total number of accumulated messages in the thread.
+        metadata:
+          type: object
+          description: The `metadata` object from the webhook config, returned unchanged.
+        error:
+          type: string
+          description: "Present only for `error` events — describes what went wrong."
 
     DomainEvent:
       type: object

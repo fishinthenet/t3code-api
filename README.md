@@ -77,7 +77,26 @@ done
 curl -s "localhost:4774/threads/$TID/messages" | jq '.messages[-1].text'
 ```
 
-**Thread options**: `provider` (`codex`|`claudeAgent`), `model` (`gpt-5.4`, `claude-opus-4-6`, `claude-sonnet-4-6`), `runtimeMode`, `interactionMode`, `workdir`, `attachments`. All optional — see `/docs` for details.
+**Thread options**: `provider` (`codex`|`claudeAgent`), `model` (`gpt-5.4`, `claude-opus-4-6`, `claude-sonnet-4-6`), `runtimeMode`, `interactionMode`, `workdir`, `webhook`, `attachments`. All optional — see `/docs` for details.
+
+### Webhooks
+
+Skip polling — get notified when an agent finishes or fails:
+
+```bash
+curl -s -X POST localhost:4774/threads \
+  -H 'Content-Type: application/json' \
+  -d "{\"projectId\": \"$PROJECT\",
+       \"webhook\": {
+         \"url\": \"https://example.com/callback\",
+         \"events\": [\"completed\", \"error\"],
+         \"headers\": {\"Authorization\": \"Bearer xxx\"},
+         \"metadata\": {\"source\": \"mybot\", \"taskId\": 42}
+       },
+       \"initialMessage\": {\"text\": \"Refactor auth module\"}}"
+```
+
+The bridge POSTs a JSON payload to your URL when the thread status transitions to idle/ready (`completed`) or error (`error`). Retries 3 times with exponential backoff (1s → 5s → 15s), 10s timeout per attempt. The `metadata` object is returned unchanged in every callback.
 
 ## Architecture
 
@@ -87,6 +106,7 @@ curl -s "localhost:4774/threads/$TID/messages" | jq '.messages[-1].text'
 | `src/ws-client.ts` | Persistent WebSocket client (auto-reconnect, heartbeat, request matching) |
 | `src/event-buffer.ts` | Per-thread circular buffer with streaming accumulation |
 | `src/routes.ts` | Hono REST routes — HTTP ↔ WS translation |
+| `src/webhook.ts` | Per-thread webhook delivery with retry and backoff |
 | `src/openapi.yaml` | OpenAPI 3.1 spec (powers Swagger UI) |
 
 Event buffer is in-memory only. T3 Code server is the source of truth — `GET /snapshot` rebuilds state after bridge restart.
