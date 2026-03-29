@@ -1,6 +1,7 @@
 import { describe, it, expect, mock, beforeEach } from "bun:test";
 import { EventBuffer } from "./event-buffer";
 import { createRoutes } from "./routes";
+import { WebhookManager } from "./webhook";
 import type { T3WebSocketClient } from "./ws-client";
 import { writeFile, unlink, mkdtemp } from "node:fs/promises";
 import { join } from "node:path";
@@ -24,8 +25,9 @@ function createMockWs(): T3WebSocketClient {
 function makeApp() {
   const ws = createMockWs();
   const events = new EventBuffer();
-  const app = createRoutes({ ws, events });
-  return { app, ws, events };
+  const webhooks = new WebhookManager();
+  const app = createRoutes({ ws, events, webhooks });
+  return { app, ws, events, webhooks };
 }
 
 async function json(app: ReturnType<typeof createRoutes>, path: string, init?: RequestInit) {
@@ -598,6 +600,83 @@ describe("routes", () => {
       const evts = res.body.events as Array<Record<string, unknown>>;
       expect(evts).toHaveLength(1);
       expect(evts[0].type).toBe("thread.session-set");
+    });
+  });
+
+  describe("POST /threads with webhook", () => {
+    it("registers webhook config on thread creation", async () => {
+      const { app, webhooks } = makeApp();
+      const res = await json(app, "/threads", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId: "proj-1",
+          webhook: {
+            url: "http://example.com/callback",
+            events: ["completed", "error"],
+            headers: { Authorization: "Bearer secret" },
+            metadata: { source: "test", topic: 7 },
+          },
+        }),
+      });
+
+      expect(res.status).toBe(201);
+      const threadId = res.body.threadId as string;
+      expect(webhooks.has(threadId)).toBe(true);
+      const config = webhooks.get(threadId)!;
+      expect(config.url).toBe("http://example.com/callback");
+      expect(config.events).toEqual(["completed", "error"]);
+      expect(config.headers).toEqual({ Authorization: "Bearer secret" });
+      expect(config.metadata).toEqual({ source: "test", topic: 7 });
+    });
+
+    it("does not register webhook when field absent", async () => {
+      const { app, webhooks } = makeApp();
+      const res = await json(app, "/threads", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId: "proj-1" }),
+      });
+
+      expect(res.status).toBe(201);
+      expect(webhooks.has(res.body.threadId as string)).toBe(false);
+    });
+
+    it("webhook defaults events to completed + error when empty", async () => {
+      const { app, webhooks } = makeApp();
+      const res = await json(app, "/threads", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId: "proj-1",
+          webhook: { url: "http://x.com" },
+        }),
+      });
+
+      expect(res.status).toBe(201);
+      const config = webhooks.get(res.body.threadId as string)!;
+      expect(config.events).toEqual(["completed", "error"]);
+    });
+  });
+
+  describe("DELETE /threads/:id cleans up webhook", () => {
+    it("removes webhook on thread delete", async () => {
+      const { app, webhooks } = makeApp();
+      // Create thread with webhook
+      const res = await json(app, "/threads", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId: "proj-1",
+          webhook: { url: "http://x.com", events: ["completed"] },
+        }),
+      });
+      const threadId = res.body.threadId as string;
+      expect(webhooks.has(threadId)).toBe(true);
+
+      // Delete thread
+      await json(app, `/threads/${threadId}`, { method: "DELETE" });
+      expect(webhooks.has(threadId)).toBe(false);
     });
   });
 });

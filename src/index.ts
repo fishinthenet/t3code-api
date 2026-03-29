@@ -9,6 +9,7 @@
 import { serve } from "bun";
 import { T3WebSocketClient } from "./ws-client";
 import { EventBuffer } from "./event-buffer";
+import { WebhookManager } from "./webhook";
 import { createRoutes } from "./routes";
 
 // ── Config ────────────────────────────────────────────────────────────
@@ -21,11 +22,25 @@ const MAX_EVENTS = Number(process.env.T3API_MAX_EVENTS ?? 500);
 // ── Bootstrap ─────────────────────────────────────────────────────────
 
 const events = new EventBuffer(MAX_EVENTS);
+const webhooks = new WebhookManager();
 const ws = new T3WebSocketClient(T3_WS_URL);
 
 ws.onPush = (msg) => {
   if (msg.channel === "orchestration.domainEvent") {
-    events.push(msg.data as import("./event-buffer").DomainEvent);
+    const event = msg.data as import("./event-buffer").DomainEvent;
+    events.push(event);
+
+    // Trigger webhooks on status transitions.
+    if (event.type === "thread.session-set") {
+      const threadId = event.payload?.threadId as string | undefined;
+      const session = event.payload?.session as Record<string, unknown> | undefined;
+      if (threadId && session?.status) {
+        const messages = events.getMessages(threadId);
+        webhooks.onStatusChange(threadId, session.status as string, {
+          messagesCount: messages.length,
+        });
+      }
+    }
   }
 };
 
@@ -49,7 +64,7 @@ ws.onDisconnected = () => {
 
 // ── HTTP Server ───────────────────────────────────────────────────────
 
-const app = createRoutes({ ws, events });
+const app = createRoutes({ ws, events, webhooks });
 
 serve({
   port: PORT,

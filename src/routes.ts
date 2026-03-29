@@ -7,6 +7,7 @@ import { readFile } from "node:fs/promises";
 import { basename, extname } from "node:path";
 import type { T3WebSocketClient } from "./ws-client";
 import type { EventBuffer, DomainEvent } from "./event-buffer";
+import type { WebhookConfig, WebhookManager } from "./webhook";
 
 const SWAGGER_UI_HTML = `<!DOCTYPE html>
 <html lang="en">
@@ -77,9 +78,10 @@ async function resolveAttachment(input: AttachmentInput) {
 interface Deps {
   ws: T3WebSocketClient;
   events: EventBuffer;
+  webhooks?: WebhookManager;
 }
 
-export function createRoutes({ ws, events }: Deps) {
+export function createRoutes({ ws, events, webhooks }: Deps) {
   const app = new Hono();
 
   // ── Global error handler ─────────────────────────────────────────
@@ -144,6 +146,7 @@ export function createRoutes({ ws, events }: Deps) {
         text: string;
         attachments?: AttachmentInput[];
       };
+      webhook?: WebhookConfig;
     }>();
 
     const threadId = crypto.randomUUID();
@@ -171,6 +174,16 @@ export function createRoutes({ ws, events }: Deps) {
         createdAt: new Date().toISOString(),
       },
     });
+
+    // Register webhook if provided.
+    if (body.webhook && webhooks) {
+      webhooks.register(
+        threadId,
+        body.webhook,
+        body.projectId,
+        body.title ?? "API Thread",
+      );
+    }
 
     // Step 2: Optionally send the first message in the same request.
     let messageId: string | undefined;
@@ -212,6 +225,7 @@ export function createRoutes({ ws, events }: Deps) {
       },
     });
     events.drop(threadId);
+    webhooks?.remove(threadId);
     return c.json({ deleted: true });
   });
 
