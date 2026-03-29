@@ -82,6 +82,21 @@ interface Deps {
 export function createRoutes({ ws, events }: Deps) {
   const app = new Hono();
 
+  /** Ensure a thread's data is in the buffer, hydrating from snapshot if needed. */
+  async function ensureHydrated(threadId: string) {
+    if (events.hasThread(threadId)) return;
+    try {
+      const snapshot = await ws.request<Record<string, unknown>>(
+        "orchestration.getSnapshot",
+      );
+      events.hydrateFromSnapshot(
+        snapshot as Parameters<typeof events.hydrateFromSnapshot>[0],
+      );
+    } catch {
+      // Snapshot unavailable — proceed with empty buffer.
+    }
+  }
+
   // ── Docs ──────────────────────────────────────────────────────────
 
   app.get("/docs", (c) => c.html(SWAGGER_UI_HTML));
@@ -235,10 +250,13 @@ export function createRoutes({ ws, events }: Deps) {
     return c.json({ messageId, commandId }, 201);
   });
 
-  app.get("/threads/:threadId/messages", (c) => {
+  app.get("/threads/:threadId/messages", async (c) => {
     const { threadId } = c.req.param();
     const after = Number(c.req.query("after") || "0");
     const limit = Number(c.req.query("limit") || "50");
+
+    await ensureHydrated(threadId);
+
     const messages = events.getMessages(threadId, {
       afterSequence: after || undefined,
       limit,
@@ -263,8 +281,11 @@ export function createRoutes({ ws, events }: Deps) {
 
   // ── Thread status ──────────────────────────────────────────────────
 
-  app.get("/threads/:threadId/status", (c) => {
+  app.get("/threads/:threadId/status", async (c) => {
     const { threadId } = c.req.param();
+
+    await ensureHydrated(threadId);
+
     const status = events.getThreadStatus(threadId);
     return c.json({ threadId, status });
   });

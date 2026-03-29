@@ -166,6 +166,89 @@ export class EventBuffer {
     this.threads.delete(threadId);
   }
 
+  /** Whether a thread has any buffered events. */
+  hasThread(threadId: string): boolean {
+    const buf = this.threads.get(threadId);
+    return buf !== undefined && buf.length > 0;
+  }
+
+  /**
+   * Hydrate the buffer from a T3 Code orchestration snapshot.
+   * Converts snapshot messages into synthetic `thread.message-sent` events
+   * so that historical threads are available through the same API.
+   * Only hydrates threads not already in the buffer (won't overwrite live data).
+   */
+  hydrateFromSnapshot(snapshot: {
+    snapshotSequence?: number;
+    threads?: Array<{
+      id: string;
+      messages?: Array<{
+        id: string;
+        role: string;
+        text: string;
+        turnId: string | null;
+        streaming: boolean;
+        createdAt: string;
+        updatedAt: string;
+      }>;
+      session?: { status: string } | null;
+    }>;
+  }) {
+    if (!snapshot.threads) return;
+
+    const baseSeq = snapshot.snapshotSequence ?? 0;
+    if (baseSeq > this.globalSequence) {
+      this.globalSequence = baseSeq;
+    }
+
+    let syntheticSeq = 0;
+
+    for (const thread of snapshot.threads) {
+      // Don't overwrite threads that already have live events.
+      if (this.hasThread(thread.id)) continue;
+
+      // Hydrate messages as synthetic events.
+      if (thread.messages?.length) {
+        for (const msg of thread.messages) {
+          syntheticSeq++;
+          this.push({
+            sequence: syntheticSeq,
+            eventId: `hydrated-${thread.id}-${msg.id}`,
+            type: "thread.message-sent",
+            aggregateId: thread.id,
+            occurredAt: msg.createdAt,
+            payload: {
+              threadId: thread.id,
+              messageId: msg.id,
+              role: msg.role,
+              text: msg.text,
+              turnId: msg.turnId,
+              streaming: msg.streaming,
+              createdAt: msg.createdAt,
+              updatedAt: msg.updatedAt,
+            },
+          });
+        }
+      }
+
+      // Hydrate session status.
+      if (thread.session) {
+        syntheticSeq++;
+        this.push({
+          sequence: syntheticSeq,
+          eventId: `hydrated-session-${thread.id}`,
+          type: "thread.session-set",
+          aggregateId: thread.id,
+          occurredAt: new Date().toISOString(),
+          payload: {
+            threadId: thread.id,
+            session: thread.session,
+          },
+        });
+      }
+    }
+  }
+
   /** Current highest observed sequence. */
   get lastSequence(): number {
     return this.globalSequence;

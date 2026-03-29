@@ -314,6 +314,154 @@ describe("EventBuffer", () => {
     });
   });
 
+  describe("hydrateFromSnapshot", () => {
+    it("populates messages from snapshot threads", () => {
+      const buf = new EventBuffer();
+      buf.hydrateFromSnapshot({
+        snapshotSequence: 100,
+        threads: [
+          {
+            id: "t1",
+            messages: [
+              {
+                id: "m1",
+                role: "user",
+                text: "Hello",
+                turnId: null,
+                streaming: false,
+                createdAt: "2026-03-27T12:00:00Z",
+                updatedAt: "2026-03-27T12:00:00Z",
+              },
+              {
+                id: "m2",
+                role: "assistant",
+                text: "Hi there!",
+                turnId: "turn-1",
+                streaming: false,
+                createdAt: "2026-03-27T12:00:01Z",
+                updatedAt: "2026-03-27T12:00:05Z",
+              },
+            ],
+            session: { status: "idle" },
+          },
+        ],
+      });
+
+      const msgs = buf.getMessages("t1");
+      expect(msgs).toHaveLength(2);
+      expect(msgs[0].role).toBe("user");
+      expect(msgs[0].text).toBe("Hello");
+      expect(msgs[1].role).toBe("assistant");
+      expect(msgs[1].text).toBe("Hi there!");
+
+      expect(buf.getThreadStatus("t1")).toBe("idle");
+      expect(buf.lastSequence).toBe(100);
+    });
+
+    it("does not overwrite threads that already have live events", () => {
+      const buf = new EventBuffer();
+      buf.push(
+        makeMessageEvent("t1", "live-msg", {
+          role: "user",
+          text: "Live message",
+          streaming: false,
+        }),
+      );
+
+      buf.hydrateFromSnapshot({
+        snapshotSequence: 50,
+        threads: [
+          {
+            id: "t1",
+            messages: [
+              {
+                id: "old-msg",
+                role: "user",
+                text: "Old snapshot message",
+                turnId: null,
+                streaming: false,
+                createdAt: "2026-03-27T10:00:00Z",
+                updatedAt: "2026-03-27T10:00:00Z",
+              },
+            ],
+          },
+        ],
+      });
+
+      const msgs = buf.getMessages("t1");
+      expect(msgs).toHaveLength(1);
+      expect(msgs[0].text).toBe("Live message");
+    });
+
+    it("hydrates multiple threads", () => {
+      const buf = new EventBuffer();
+      buf.hydrateFromSnapshot({
+        threads: [
+          {
+            id: "t1",
+            messages: [
+              {
+                id: "m1",
+                role: "user",
+                text: "Thread 1",
+                turnId: null,
+                streaming: false,
+                createdAt: "2026-03-27T12:00:00Z",
+                updatedAt: "2026-03-27T12:00:00Z",
+              },
+            ],
+          },
+          {
+            id: "t2",
+            messages: [
+              {
+                id: "m2",
+                role: "user",
+                text: "Thread 2",
+                turnId: null,
+                streaming: false,
+                createdAt: "2026-03-27T12:00:00Z",
+                updatedAt: "2026-03-27T12:00:00Z",
+              },
+            ],
+          },
+        ],
+      });
+
+      expect(buf.knownThreadIds()).toContain("t1");
+      expect(buf.knownThreadIds()).toContain("t2");
+      expect(buf.getMessages("t1")[0].text).toBe("Thread 1");
+      expect(buf.getMessages("t2")[0].text).toBe("Thread 2");
+    });
+
+    it("handles empty snapshot gracefully", () => {
+      const buf = new EventBuffer();
+      buf.hydrateFromSnapshot({});
+      buf.hydrateFromSnapshot({ threads: [] });
+      expect(buf.knownThreadIds()).toHaveLength(0);
+    });
+  });
+
+  describe("hasThread", () => {
+    it("returns false for unknown thread", () => {
+      const buf = new EventBuffer();
+      expect(buf.hasThread("nonexistent")).toBe(false);
+    });
+
+    it("returns true after push", () => {
+      const buf = new EventBuffer();
+      buf.push(makeEvent("t1", "a"));
+      expect(buf.hasThread("t1")).toBe(true);
+    });
+
+    it("returns false after drop", () => {
+      const buf = new EventBuffer();
+      buf.push(makeEvent("t1", "a"));
+      buf.drop("t1");
+      expect(buf.hasThread("t1")).toBe(false);
+    });
+  });
+
   describe("drop", () => {
     it("removes a thread's buffer", () => {
       const buf = new EventBuffer();

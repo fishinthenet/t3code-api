@@ -29,8 +29,18 @@ ws.onPush = (msg) => {
   }
 };
 
-ws.onConnected = () => {
+ws.onConnected = async () => {
   console.log(`[t3code-api] Connected to T3 Code at ${T3_WS_URL}`);
+
+  // Hydrate event buffer with historical state from snapshot.
+  try {
+    const snapshot = await ws.request<Record<string, unknown>>("orchestration.getSnapshot");
+    events.hydrateFromSnapshot(snapshot as Parameters<typeof events.hydrateFromSnapshot>[0]);
+    const threads = (snapshot.threads as unknown[])?.length ?? 0;
+    console.log(`[t3code-api] Hydrated ${threads} thread(s) from snapshot`);
+  } catch (err) {
+    console.warn(`[t3code-api] Failed to hydrate from snapshot:`, err);
+  }
 };
 
 ws.onDisconnected = () => {
