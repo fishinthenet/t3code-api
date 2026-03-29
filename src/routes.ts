@@ -121,7 +121,7 @@ export function createRoutes({ ws, events, webhooks }: Deps) {
   // ── Health ──────────────────────────────────────────────────────────
 
   app.get("/health", (c) =>
-    c.json({ ok: true, connected: ws.connected, lastSequence: events.lastSequence }),
+    c.json({ ok: true, version: "0.0.18", connected: ws.connected, lastSequence: events.lastSequence }),
   );
 
   // ── Snapshot ────────────────────────────────────────────────────────
