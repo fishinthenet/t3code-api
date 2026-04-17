@@ -82,7 +82,7 @@ done
 curl -s "localhost:4774/threads/$TID/messages" | jq '.messages[-1].text'
 ```
 
-**Thread options**: `provider` (`codex`|`claudeAgent`), `model` (`gpt-5.4`, `claude-opus-4-6`, `claude-sonnet-4-6`), `modelOptions` (provider-specific: `reasoningEffort`, `thinking`, `effort`, `contextWindow`, `fastMode`), `runtimeMode`, `interactionMode`, `workdir`, `webhook`, `attachments`. All optional — see `/docs` for details.
+**Thread options**: `provider` (`codex`|`claudeAgent`), `model` (`gpt-5.4`, `claude-opus-4-6`, `claude-sonnet-4-6`), `modelOptions` (provider-specific: `reasoningEffort`, `thinking`, `effort`, `contextWindow`, `fastMode`), `runtimeMode` (`approval-required` | `auto-accept-edits` | `full-access` on T3 Code 0.0.18+; `read-only` | `workspace-write` | `full-access` on earlier versions), `interactionMode`, `workdir`, `webhook`, `attachments`. All optional — see `/docs` for details.
 
 ### Webhooks
 
@@ -161,10 +161,19 @@ See [docs/openclaw-flow.md](docs/openclaw-flow.md) for full setup including Open
 | File | Role |
 |------|------|
 | `src/index.ts` | Entry point — config, HTTP server, snapshot hydration on connect |
-| `src/ws-client.ts` | Persistent WebSocket client (auto-reconnect, heartbeat, request matching) |
+| `src/ws-client.ts` | Persistent WebSocket client (auto-reconnect, native WS ping/pong heartbeat, Effect RPC framing, request matching, streaming requests via `requestStream()`) |
 | `src/event-buffer.ts` | Per-thread circular buffer with streaming accumulation |
 | `src/routes.ts` | Hono REST routes — HTTP ↔ WS translation |
 | `src/webhook.ts` | Per-thread webhook delivery with retry and backoff |
 | `src/openapi.yaml` | OpenAPI 3.1 spec (powers Swagger UI) |
 
 Event buffer is in-memory only. T3 Code server is the source of truth — `GET /snapshot` rebuilds state after bridge restart.
+
+## T3 Code compatibility
+
+| t3code-api | T3 Code | Notes |
+|------------|---------|-------|
+| `≥ 0.0.21` | `≥ 0.0.18` | Effect RPC wire protocol, `subscribeShell` for snapshot, flat `dispatchCommand` payload, renamed `runtimeMode` enum. |
+| `≤ 0.0.20` | `≤ 0.0.17` | Legacy `{id, body:{_tag,...}}` envelope. Pin this range if you must talk to T3 Code 0.0.17 or earlier. |
+
+After upgrading T3 Code, verify the bridge still works — `connected:true` on `/health`, no reconnect loop in logs, and a `POST /threads` + `DELETE /threads/:id` smoke test should both succeed. See `CLAUDE.md` → _Diagnosing protocol drift_ for the diagnostic checklist.

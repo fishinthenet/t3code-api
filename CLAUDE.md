@@ -35,6 +35,8 @@ src/
    - **Server settings** proxied to T3 Code server (`server.getSettings`, `server.updateSettings`, `server.refreshProviders`)
 4. On `thread.session-set` events, triggers per-thread webhooks (if registered) with retry and backoff
 
+> ⚠️ **Known caveat (v0.0.18+)**: live pushes to the in-memory event buffer currently depend on a legacy hook that no longer fires in T3 Code 0.0.18. The bridge still hydrates snapshots via `subscribeShell` and runs per-thread webhooks, but `/threads/:id/messages` and `/threads/:id/status` may return empty/null for threads created after start. Use per-thread webhooks for completion/status events. A follow-up PR will keep a long-lived subscribeShell open and route chunks into the buffer.
+
 ## Commands
 
 ```bash
@@ -63,22 +65,45 @@ bun run start      # Start without watching
 
 ## T3 Code WebSocket protocol (reference)
 
-The bridge speaks the same protocol as the T3 Code web frontend. Key shapes:
+The bridge speaks the same protocol as the T3 Code web frontend. Since T3 Code **v0.0.18** the wire format is [Effect RPC](https://effect.website/) with JSON serialization (`@effect/rpc` + `RpcSerialization.layerJson`).
 
 **Request** (bridge → T3 Code):
 ```json
-{ "id": "1", "body": { "_tag": "method.name", ...params } }
+{ "_tag": "Request", "id": "1", "tag": "method.name", "payload": { ...params }, "headers": [] }
 ```
 
-**Response** (T3 Code → bridge):
+**Ack / Interrupt** (bridge → T3 Code, for streaming requests):
 ```json
-{ "id": "1", "result": { ... } }
+{ "_tag": "Ack", "requestId": "1" }
+{ "_tag": "Interrupt", "requestId": "1" }
 ```
 
-**Push** (T3 Code → bridge, unsolicited):
+**Exit** (T3 Code → bridge, terminal response):
 ```json
-{ "type": "push", "sequence": 42, "channel": "orchestration.domainEvent", "data": { ... } }
+{ "_tag": "Exit", "requestId": "1", "exit": { "_tag": "Success", "value": { ... } } }
+{ "_tag": "Exit", "requestId": "1", "exit": { "_tag": "Failure", "cause": { ... } } }
 ```
+
+**Chunk** (T3 Code → bridge, streaming values before Exit):
+```json
+{ "_tag": "Chunk", "requestId": "1", "values": [ ... ] }
+```
+
+**Defect** (T3 Code → bridge, protocol error — e.g. unknown request tag):
+```json
+{ "_tag": "Defect", "defect": "Unknown request tag: ..." }
+```
+
+### Legacy protocol (T3 Code ≤ 0.0.17)
+
+Older T3 Code releases used a simpler envelope — `{ id, body: { _tag, ...params } }` for requests, `{ id, result }` for responses, and `{ type: "push", ... }` for unsolicited pushes. This bridge no longer supports it; pin to `t3code-api@0.0.20` if you must talk to T3 Code 0.0.17 or earlier.
+
+### Notable v0.0.18 breaking changes
+
+- `orchestration.getSnapshot` was **removed**. The same data is now the first chunk of the `orchestration.subscribeShell` stream: `{ kind: "snapshot", snapshot: { projects, threads, ... } }`.
+- `orchestration.dispatchCommand` payload is **flat** (the command struct itself, discriminated by `type`) — no more `{ command: { ... } }` wrapper.
+- `runtimeMode` enum renamed: `read-only` → `approval-required`, `workspace-write` → `auto-accept-edits` (`full-access` unchanged).
+- `orchestration.getFullThreadDiff.toTurnCount` is now **required**.
 
 Protocol definitions live in T3 Code at `packages/contracts/src/ws.ts` and `packages/contracts/src/orchestration.ts`.
 
@@ -93,3 +118,12 @@ Swagger UI is served at `/docs`, the raw OpenAPI spec at `/openapi.yaml`. Both a
 3. For write operations: use `ws.request("method.tag", { ...params })` to forward to T3 Code
 4. Update `src/openapi.yaml` with the new endpoint schema
 5. The T3 Code WS method tags are documented in `packages/contracts/src/ws.ts` (`WS_METHODS` and `ORCHESTRATION_WS_METHODS` constants)
+
+### Diagnosing protocol drift after a T3 Code upgrade
+
+T3 Code has a history of unannounced breaking changes in the WS API (see `v0.0.18` above). After any T3 Code upgrade:
+
+1. Health check — `connected:true` with `lastSequence > 0`?
+2. No reconnect loop in logs?
+3. Smoke test `POST /threads` then `DELETE /threads/:id`.
+4. Diff the set of WS tags that t3code-api uses (`grep -oE 'ws\.request(Stream)?\("[^"]+"' src/*.ts`) against what the new `bin.mjs` exposes (`grep -oE '"(orchestration|server|session|project|workspace|auth)\.[a-zA-Z]+"'`). Missing tags → protocol change, find replacements.
