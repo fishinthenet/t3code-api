@@ -98,12 +98,12 @@ export function createRoutes({ ws, events, webhooks }: Deps) {
   async function ensureHydrated(threadId: string) {
     if (events.hasThread(threadId)) return;
     try {
-      const snapshot = await ws.request<Record<string, unknown>>(
-        "orchestration.getSnapshot",
-      );
-      events.hydrateFromSnapshot(
-        snapshot as Parameters<typeof events.hydrateFromSnapshot>[0],
-      );
+      const snapshot = await fetchSnapshot(ws);
+      if (snapshot) {
+        events.hydrateFromSnapshot(
+          snapshot as Parameters<typeof events.hydrateFromSnapshot>[0],
+        );
+      }
     } catch {
       // Snapshot unavailable — proceed with empty buffer.
     }
@@ -127,7 +127,8 @@ export function createRoutes({ ws, events, webhooks }: Deps) {
   // ── Snapshot ────────────────────────────────────────────────────────
 
   app.get("/snapshot", async (c) => {
-    const snapshot = await ws.request("orchestration.getSnapshot");
+    const snapshot = await fetchSnapshot(ws);
+    if (!snapshot) return c.json({ error: "Snapshot unavailable" }, 503);
     return c.json(snapshot);
   });
 
@@ -160,24 +161,21 @@ export function createRoutes({ ws, events, webhooks }: Deps) {
     if (body.modelOptions) modelSelection.options = body.modelOptions;
 
     // Step 1: Create the thread.
-    // Send both nested modelSelection (v0.0.15+) and flat model field (v0.0.14)
-    // for backward compatibility. Effect Schema strips unknown properties,
-    // so each version uses only the fields it recognizes.
+    // v0.0.18+: dispatchCommand payload is the command struct itself (flat,
+    // discriminated by `type`). Previously it was nested under `{command: {...}}`.
     await ws.request("orchestration.dispatchCommand", {
-      command: {
-        type: "thread.create",
-        commandId: crypto.randomUUID(),
-        threadId,
-        projectId: body.projectId,
-        title: body.title ?? "API Thread",
-        model,
-        modelSelection,
-        runtimeMode,
-        interactionMode,
-        branch: null,
-        worktreePath: body.workdir ?? null,
-        createdAt: new Date().toISOString(),
-      },
+      type: "thread.create",
+      commandId: crypto.randomUUID(),
+      threadId,
+      projectId: body.projectId,
+      title: body.title ?? "API Thread",
+      model,
+      modelSelection,
+      runtimeMode,
+      interactionMode,
+      branch: null,
+      worktreePath: body.workdir ?? null,
+      createdAt: new Date().toISOString(),
     });
 
     // Register webhook if provided.
@@ -200,24 +198,21 @@ export function createRoutes({ ws, events, webhooks }: Deps) {
         : [];
 
       await ws.request("orchestration.dispatchCommand", {
-        command: {
-          type: "thread.turn.start",
-          commandId: crypto.randomUUID(),
-          threadId,
-          message: {
-            messageId,
-            role: "user",
-            text: body.initialMessage.text,
-            attachments,
-          },
-          // Flat fields for v0.0.14 compat (optional in turn start)
-          provider,
-          model,
-          ...(body.modelOptions ? { modelOptions: body.modelOptions } : {}),
-          runtimeMode,
-          interactionMode,
-          createdAt: new Date().toISOString(),
+        type: "thread.turn.start",
+        commandId: crypto.randomUUID(),
+        threadId,
+        message: {
+          messageId,
+          role: "user",
+          text: body.initialMessage.text,
+          attachments,
         },
+        provider,
+        model,
+        ...(body.modelOptions ? { modelOptions: body.modelOptions } : {}),
+        runtimeMode,
+        interactionMode,
+        createdAt: new Date().toISOString(),
       });
     }
 
@@ -227,11 +222,9 @@ export function createRoutes({ ws, events, webhooks }: Deps) {
   app.delete("/threads/:threadId", async (c) => {
     const { threadId } = c.req.param();
     await ws.request("orchestration.dispatchCommand", {
-      command: {
-        type: "thread.delete",
-        commandId: crypto.randomUUID(),
-        threadId,
-      },
+      type: "thread.delete",
+      commandId: crypto.randomUUID(),
+      threadId,
     });
     events.drop(threadId);
     webhooks?.remove(threadId);
@@ -270,25 +263,22 @@ export function createRoutes({ ws, events, webhooks }: Deps) {
     }
 
     await ws.request("orchestration.dispatchCommand", {
-      command: {
-        type: "thread.turn.start",
-        commandId,
-        threadId,
-        message: {
-          messageId,
-          role: "user",
-          text: body.text,
-          attachments,
-        },
-        // Nested for v0.0.15+, flat for v0.0.14 compat
-        ...(turnModelSelection ? { modelSelection: turnModelSelection } : {}),
-        ...(body.provider ? { provider: body.provider } : {}),
-        ...(body.model ? { model: body.model } : {}),
-        ...(body.modelOptions ? { modelOptions: body.modelOptions } : {}),
-        runtimeMode: body.runtimeMode ?? "full-access",
-        interactionMode: body.interactionMode ?? "default",
-        createdAt: new Date().toISOString(),
+      type: "thread.turn.start",
+      commandId,
+      threadId,
+      message: {
+        messageId,
+        role: "user",
+        text: body.text,
+        attachments,
       },
+      ...(turnModelSelection ? { modelSelection: turnModelSelection } : {}),
+      ...(body.provider ? { provider: body.provider } : {}),
+      ...(body.model ? { model: body.model } : {}),
+      ...(body.modelOptions ? { modelOptions: body.modelOptions } : {}),
+      runtimeMode: body.runtimeMode ?? "full-access",
+      interactionMode: body.interactionMode ?? "default",
+      createdAt: new Date().toISOString(),
     });
 
     return c.json({ messageId, commandId }, 201);
@@ -339,12 +329,10 @@ export function createRoutes({ ws, events, webhooks }: Deps) {
   app.post("/threads/:threadId/interrupt", async (c) => {
     const { threadId } = c.req.param();
     await ws.request("orchestration.dispatchCommand", {
-      command: {
-        type: "thread.turn.interrupt",
-        commandId: crypto.randomUUID(),
-        threadId,
-        createdAt: new Date().toISOString(),
-      },
+      type: "thread.turn.interrupt",
+      commandId: crypto.randomUUID(),
+      threadId,
+      createdAt: new Date().toISOString(),
     });
     return c.json({ interrupted: true });
   });
@@ -365,9 +353,11 @@ export function createRoutes({ ws, events, webhooks }: Deps) {
       return c.json(diff);
     }
 
+    // v0.0.18+: `toTurnCount` is required (non-optional). When the caller
+    // omits a turn count, ask for everything by setting a large upper bound.
     const diff = await ws.request("orchestration.getFullThreadDiff", {
       threadId,
-      toTurnCount: from || undefined,
+      toTurnCount: from > 0 ? from : 1_000_000,
     });
     return c.json(diff);
   });
@@ -386,9 +376,57 @@ export function createRoutes({ ws, events, webhooks }: Deps) {
   });
 
   app.post("/server/providers/refresh", async (c) => {
-    const result = await ws.request("server.refreshProviders");
+    const result = await ws.request("server.refreshProviders", {});
     return c.json(result);
   });
 
   return app;
+}
+
+/**
+ * Fetch a full orchestration snapshot via the subscribeShell stream.
+ *
+ * v0.0.18+ removed `orchestration.getSnapshot`. The shell subscription stream
+ * emits the same data as its first chunk: `{kind: "snapshot", snapshot: {...}}`.
+ * We open the stream, wait for the first snapshot chunk, cancel, and return.
+ */
+async function fetchSnapshot(
+  ws: T3WebSocketClient,
+): Promise<Record<string, unknown> | null> {
+  return new Promise((resolve) => {
+    let resolved = false;
+    const timer = setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        try { handle.cancel(); } catch { /* noop */ }
+        resolve(null);
+      }
+    }, 5000);
+
+    const handle = ws.requestStream<Record<string, unknown>>(
+      "orchestration.subscribeShell",
+      {},
+      (values) => {
+        if (resolved) return;
+        for (const v of values) {
+          const chunk = v as { kind?: string; snapshot?: Record<string, unknown> };
+          if (chunk?.kind === "snapshot" && chunk.snapshot) {
+            resolved = true;
+            clearTimeout(timer);
+            try { handle.cancel(); } catch { /* noop */ }
+            resolve(chunk.snapshot);
+            return;
+          }
+        }
+      },
+    );
+
+    handle.done.catch(() => {
+      if (!resolved) {
+        resolved = true;
+        clearTimeout(timer);
+        resolve(null);
+      }
+    });
+  });
 }
