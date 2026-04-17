@@ -16,6 +16,7 @@ import { createRoutes } from "./routes";
 
 const PORT = Number(process.env.T3API_PORT ?? 4774);
 const T3_WS_URL = process.env.T3API_WS_URL ?? "ws://localhost:3773";
+const T3_WS_TOKEN = process.env.T3API_WS_TOKEN ?? undefined;
 const API_TOKEN = process.env.T3API_TOKEN ?? undefined;
 const MAX_EVENTS = Number(process.env.T3API_MAX_EVENTS ?? 500);
 
@@ -23,7 +24,7 @@ const MAX_EVENTS = Number(process.env.T3API_MAX_EVENTS ?? 500);
 
 const events = new EventBuffer(MAX_EVENTS);
 const webhooks = new WebhookManager();
-const ws = new T3WebSocketClient(T3_WS_URL);
+const ws = new T3WebSocketClient(T3_WS_URL, 30_000, T3_WS_TOKEN);
 
 ws.onPush = (msg) => {
   if (msg.channel === "orchestration.domainEvent") {
@@ -48,11 +49,48 @@ ws.onConnected = async () => {
   console.log(`[t3code-api] Connected to T3 Code at ${T3_WS_URL}`);
 
   // Hydrate event buffer with historical state from snapshot.
+  // v0.0.18+: `orchestration.getSnapshot` was removed; the same data arrives
+  // as the first chunk of `orchestration.subscribeShell` (kind: "snapshot").
   try {
-    const snapshot = await ws.request<Record<string, unknown>>("orchestration.getSnapshot");
-    events.hydrateFromSnapshot(snapshot as Parameters<typeof events.hydrateFromSnapshot>[0]);
-    const threads = (snapshot.threads as unknown[])?.length ?? 0;
-    console.log(`[t3code-api] Hydrated ${threads} thread(s) from snapshot`);
+    const snapshot = await new Promise<Record<string, unknown> | null>((resolve) => {
+      let resolved = false;
+      const timer = setTimeout(() => {
+        if (resolved) return;
+        resolved = true;
+        try { handle.cancel(); } catch {}
+        resolve(null);
+      }, 5000);
+      const handle = ws.requestStream<Record<string, unknown>>(
+        "orchestration.subscribeShell",
+        {},
+        (values) => {
+          if (resolved) return;
+          for (const v of values) {
+            const c = v as { kind?: string; snapshot?: Record<string, unknown> };
+            if (c?.kind === "snapshot" && c.snapshot) {
+              resolved = true;
+              clearTimeout(timer);
+              try { handle.cancel(); } catch {}
+              resolve(c.snapshot);
+              return;
+            }
+          }
+        },
+      );
+      handle.done.catch(() => {
+        if (resolved) return;
+        resolved = true;
+        clearTimeout(timer);
+        resolve(null);
+      });
+    });
+    if (snapshot) {
+      events.hydrateFromSnapshot(snapshot as Parameters<typeof events.hydrateFromSnapshot>[0]);
+      const threads = (snapshot.threads as unknown[])?.length ?? 0;
+      console.log(`[t3code-api] Hydrated ${threads} thread(s) from snapshot`);
+    } else {
+      console.warn(`[t3code-api] Snapshot unavailable (timeout)`);
+    }
   } catch (err) {
     console.warn(`[t3code-api] Failed to hydrate from snapshot:`, err);
   }
