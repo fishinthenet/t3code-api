@@ -201,14 +201,14 @@ export class EventBuffer {
       this.globalSequence = baseSeq;
     }
 
-    let syntheticSeq = 0;
+    let syntheticSeq = this.globalSequence;
 
     for (const thread of snapshot.threads) {
-      // Don't overwrite threads that already have live events.
-      if (this.hasThread(thread.id)) continue;
+      const alreadyBuffered = this.hasThread(thread.id);
 
-      // Hydrate messages as synthetic events.
-      if (thread.messages?.length) {
+      // Hydrate messages only for threads not already in the buffer —
+      // avoids duplicating messages that arrived via live events.
+      if (!alreadyBuffered && thread.messages?.length) {
         for (const msg of thread.messages) {
           syntheticSeq++;
           this.push({
@@ -231,8 +231,13 @@ export class EventBuffer {
         }
       }
 
-      // Hydrate session status.
-      if (thread.session) {
+      // Reconcile session status from snapshot — even for threads already in
+      // the buffer. This fixes stale status after WS reconnect while avoiding
+      // duplicate synthetic status events when the buffered value already
+      // matches the authoritative snapshot.
+      const snapshotStatus = thread.session?.status ?? null;
+      const bufferedStatus = this.getThreadStatus(thread.id);
+      if (snapshotStatus && snapshotStatus !== bufferedStatus) {
         syntheticSeq++;
         this.push({
           sequence: syntheticSeq,

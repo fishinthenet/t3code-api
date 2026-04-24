@@ -9,10 +9,35 @@ import { tmpdir } from "node:os";
 
 // ── Mock WS client ──────────────────────────────────────────────────
 
-function createMockWs(): T3WebSocketClient {
+function createMockWs(streamSnapshot?: Record<string, unknown> | null): T3WebSocketClient {
+  const mockRequestStream = mock(
+    (_tag: string, _params: Record<string, unknown>, onChunk: (values: unknown[]) => void) => {
+      const snapshot = streamSnapshot;
+      if (snapshot) {
+        // Simulate first chunk being the snapshot, then resolve.
+        setTimeout(() => onChunk([{ kind: "snapshot", snapshot }]), 0);
+      }
+      let resolveDone!: (v: unknown[]) => void;
+      let rejectDone!: (error: Error) => void;
+      const done = new Promise<unknown[]>((resolve, reject) => {
+        resolveDone = resolve;
+        rejectDone = reject;
+      });
+      if (!snapshot) {
+        queueMicrotask(() => rejectDone(new Error("No snapshot")));
+      }
+      return {
+        id: "mock-stream-1",
+        done,
+        cancel: () => resolveDone([]),
+      };
+    },
+  );
+
   return {
     connected: true,
     request: mock(() => Promise.resolve({ sequence: 1 })),
+    requestStream: mockRequestStream,
     dispose: mock(() => {}),
     onPush: null,
     onConnected: null,
@@ -22,8 +47,8 @@ function createMockWs(): T3WebSocketClient {
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
-function makeApp() {
-  const ws = createMockWs();
+function makeApp(streamSnapshot?: Record<string, unknown> | null) {
+  const ws = createMockWs(streamSnapshot);
   const events = new EventBuffer();
   const webhooks = new WebhookManager();
   const app = createRoutes({ ws, events, webhooks });
@@ -81,11 +106,11 @@ describe("routes", () => {
       expect(ws.request).toHaveBeenCalledTimes(1);
       const [tag, params] = (ws.request as ReturnType<typeof mock>).mock.calls[0];
       expect(tag).toBe("orchestration.dispatchCommand");
-      expect(params.command.type).toBe("thread.create");
-      expect(params.command.projectId).toBe("proj-1");
-      expect(params.command.modelSelection).toEqual({ provider: "codex", model: "gpt-5.4" });
+      expect(params.type).toBe("thread.create");
+      expect(params.projectId).toBe("proj-1");
+      expect(params.modelSelection).toEqual({ provider: "codex", model: "gpt-5.4" });
       // Flat model field also sent for v0.0.14 backward compatibility.
-      expect(params.command.model).toBe("gpt-5.4");
+      expect(params.model).toBe("gpt-5.4");
     });
 
     it("passes workdir as worktreePath", async () => {
@@ -98,8 +123,8 @@ describe("routes", () => {
 
       const [tag, params] = (ws.request as ReturnType<typeof mock>).mock.calls[0];
       expect(tag).toBe("orchestration.dispatchCommand");
-      expect(params.command.type).toBe("thread.create");
-      expect(params.command.worktreePath).toBe("/opt/my-project");
+      expect(params.type).toBe("thread.create");
+      expect(params.worktreePath).toBe("/opt/my-project");
     });
 
     it("sets worktreePath to null when workdir not provided", async () => {
@@ -111,7 +136,7 @@ describe("routes", () => {
       });
 
       const [, params] = (ws.request as ReturnType<typeof mock>).mock.calls[0];
-      expect(params.command.worktreePath).toBeNull();
+      expect(params.worktreePath).toBeNull();
     });
 
     it("passes workdir with initialMessage together", async () => {
@@ -132,14 +157,14 @@ describe("routes", () => {
 
       // thread.create has worktreePath
       const [, createParams] = (ws.request as ReturnType<typeof mock>).mock.calls[0];
-      expect(createParams.command.type).toBe("thread.create");
-      expect(createParams.command.worktreePath).toBe("/opt/my-project");
+      expect(createParams.type).toBe("thread.create");
+      expect(createParams.worktreePath).toBe("/opt/my-project");
 
       // thread.turn.start uses the same threadId
       const [, turnParams] = (ws.request as ReturnType<typeof mock>).mock.calls[1];
-      expect(turnParams.command.type).toBe("thread.turn.start");
-      expect(turnParams.command.threadId).toBe(createParams.command.threadId);
-      expect(turnParams.command.message.text).toBe("List files");
+      expect(turnParams.type).toBe("thread.turn.start");
+      expect(turnParams.threadId).toBe(createParams.threadId);
+      expect(turnParams.message.text).toBe("List files");
     });
 
     it("sends initialMessage as a second dispatch", async () => {
@@ -161,9 +186,9 @@ describe("routes", () => {
       expect(ws.request).toHaveBeenCalledTimes(2);
       const [, createParams] = (ws.request as ReturnType<typeof mock>).mock.calls[0];
       const [, turnParams] = (ws.request as ReturnType<typeof mock>).mock.calls[1];
-      expect(createParams.command.type).toBe("thread.create");
-      expect(turnParams.command.type).toBe("thread.turn.start");
-      expect(turnParams.command.message.text).toBe("Do something");
+      expect(createParams.type).toBe("thread.create");
+      expect(turnParams.type).toBe("thread.turn.start");
+      expect(turnParams.message.text).toBe("Do something");
     });
   });
 
@@ -182,9 +207,9 @@ describe("routes", () => {
 
       const [tag, params] = (ws.request as ReturnType<typeof mock>).mock.calls[0];
       expect(tag).toBe("orchestration.dispatchCommand");
-      expect(params.command.type).toBe("thread.turn.start");
-      expect(params.command.threadId).toBe("tid-1");
-      expect(params.command.message.text).toBe("Hello agent");
+      expect(params.type).toBe("thread.turn.start");
+      expect(params.threadId).toBe("tid-1");
+      expect(params.message.text).toBe("Hello agent");
     });
 
     it("includes modelSelection when provider/model overridden", async () => {
@@ -200,13 +225,13 @@ describe("routes", () => {
       });
 
       const [, params] = (ws.request as ReturnType<typeof mock>).mock.calls[0];
-      expect(params.command.modelSelection).toEqual({
+      expect(params.modelSelection).toEqual({
         provider: "claudeAgent",
         model: "claude-opus-4-6",
       });
       // Flat fields also sent for v0.0.14 backward compatibility.
-      expect(params.command.provider).toBe("claudeAgent");
-      expect(params.command.model).toBe("claude-opus-4-6");
+      expect(params.provider).toBe("claudeAgent");
+      expect(params.model).toBe("claude-opus-4-6");
     });
 
     it("does not include modelSelection when no override", async () => {
@@ -218,7 +243,7 @@ describe("routes", () => {
       });
 
       const [, params] = (ws.request as ReturnType<typeof mock>).mock.calls[0];
-      expect(params.command.modelSelection).toBeUndefined();
+      expect(params.modelSelection).toBeUndefined();
     });
   });
 
@@ -249,7 +274,7 @@ describe("routes", () => {
       });
 
       const [, params] = (ws.request as ReturnType<typeof mock>).mock.calls[0];
-      const att = params.command.message.attachments[0];
+      const att = params.message.attachments[0];
       expect(att.name).toBe("test.png");
       expect(att.mimeType).toBe("image/png");
       expect(att.dataUrl).toMatch(/^data:image\/png;base64,/);
@@ -333,8 +358,8 @@ describe("routes", () => {
       expect(res.body.interrupted).toBe(true);
 
       const [, params] = (ws.request as ReturnType<typeof mock>).mock.calls[0];
-      expect(params.command.type).toBe("thread.turn.interrupt");
-      expect(params.command.threadId).toBe("tid-1");
+      expect(params.type).toBe("thread.turn.interrupt");
+      expect(params.threadId).toBe("tid-1");
     });
   });
 
@@ -362,24 +387,17 @@ describe("routes", () => {
     });
 
     it("hydrates from snapshot when thread not in buffer", async () => {
-      const ws = createMockWs();
-      (ws.request as ReturnType<typeof mock>).mockImplementation(
-        (tag: string) => {
-          if (tag === "orchestration.getSnapshot") {
-            return Promise.resolve({
-              snapshotSequence: 50,
-              threads: [
-                {
-                  id: "tid-hydrate",
-                  messages: [],
-                  session: { status: "idle" },
-                },
-              ],
-            });
-          }
-          return Promise.resolve({});
-        },
-      );
+      const snapshotData = {
+        snapshotSequence: 50,
+        threads: [
+          {
+            id: "tid-hydrate",
+            messages: [],
+            session: { status: "idle" },
+          },
+        ],
+      };
+      const ws = createMockWs(snapshotData);
       const events = new EventBuffer();
       const app = createRoutes({ ws, events });
 
@@ -387,47 +405,79 @@ describe("routes", () => {
       expect(res.status).toBe(200);
       expect(res.body.status).toBe("idle");
     });
+
+    it("returns snapshot-corrected status for thread with stale buffered status", async () => {
+      // Regression: thread already in buffer with stale "running" status.
+      // After reconnect, hydrateFromSnapshot must correct it to snapshot's value.
+      const snapshotData = {
+        snapshotSequence: 200,
+        threads: [
+          {
+            id: "tid-stale",
+            messages: [],
+            session: { status: "ready" },
+          },
+        ],
+      };
+      const ws = createMockWs(snapshotData);
+      const events = new EventBuffer();
+      const app = createRoutes({ ws, events });
+
+      // Simulate pre-reconnect state: thread exists with stale "running" status.
+      events.push({
+        sequence: 1,
+        eventId: "e-stale",
+        type: "thread.session-set",
+        aggregateId: "tid-stale",
+        occurredAt: new Date().toISOString(),
+        payload: { threadId: "tid-stale", session: { status: "running" } },
+      });
+      expect(events.getThreadStatus("tid-stale")).toBe("running");
+
+      // Simulate reconnect: hydrate from snapshot (as onConnected would do).
+      events.hydrateFromSnapshot(
+        snapshotData as Parameters<typeof events.hydrateFromSnapshot>[0],
+      );
+
+      // GET /status must return the snapshot-corrected value.
+      const res = await json(app, "/threads/tid-stale/status");
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe("ready");
+    });
   });
 
   describe("GET /threads/:id/messages — snapshot hydration", () => {
     it("hydrates messages from snapshot when thread not in buffer", async () => {
-      const ws = createMockWs();
-      (ws.request as ReturnType<typeof mock>).mockImplementation(
-        (tag: string) => {
-          if (tag === "orchestration.getSnapshot") {
-            return Promise.resolve({
-              snapshotSequence: 100,
-              threads: [
-                {
-                  id: "tid-snap",
-                  messages: [
-                    {
-                      id: "m1",
-                      role: "user",
-                      text: "From snapshot",
-                      turnId: null,
-                      streaming: false,
-                      createdAt: "2026-03-27T12:00:00Z",
-                      updatedAt: "2026-03-27T12:00:00Z",
-                    },
-                    {
-                      id: "m2",
-                      role: "assistant",
-                      text: "Snapshot reply",
-                      turnId: "turn-1",
-                      streaming: false,
-                      createdAt: "2026-03-27T12:00:01Z",
-                      updatedAt: "2026-03-27T12:00:05Z",
-                    },
-                  ],
-                  session: { status: "idle" },
-                },
-              ],
-            });
-          }
-          return Promise.resolve({});
-        },
-      );
+      const snapshotData = {
+        snapshotSequence: 100,
+        threads: [
+          {
+            id: "tid-snap",
+            messages: [
+              {
+                id: "m1",
+                role: "user",
+                text: "From snapshot",
+                turnId: null,
+                streaming: false,
+                createdAt: "2026-03-27T12:00:00Z",
+                updatedAt: "2026-03-27T12:00:00Z",
+              },
+              {
+                id: "m2",
+                role: "assistant",
+                text: "Snapshot reply",
+                turnId: "turn-1",
+                streaming: false,
+                createdAt: "2026-03-27T12:00:01Z",
+                updatedAt: "2026-03-27T12:00:05Z",
+              },
+            ],
+            session: { status: "idle" },
+          },
+        ],
+      };
+      const ws = createMockWs(snapshotData);
       const events = new EventBuffer();
       const app = createRoutes({ ws, events });
 
@@ -443,32 +493,25 @@ describe("routes", () => {
     });
 
     it("does not re-hydrate when thread already has live events", async () => {
-      const ws = createMockWs();
-      (ws.request as ReturnType<typeof mock>).mockImplementation(
-        (tag: string) => {
-          if (tag === "orchestration.getSnapshot") {
-            return Promise.resolve({
-              threads: [
-                {
-                  id: "tid-live",
-                  messages: [
-                    {
-                      id: "old",
-                      role: "user",
-                      text: "Old snapshot",
-                      turnId: null,
-                      streaming: false,
-                      createdAt: "2026-03-27T10:00:00Z",
-                      updatedAt: "2026-03-27T10:00:00Z",
-                    },
-                  ],
-                },
-              ],
-            });
-          }
-          return Promise.resolve({});
-        },
-      );
+      const snapshotData = {
+        threads: [
+          {
+            id: "tid-live",
+            messages: [
+              {
+                id: "old",
+                role: "user",
+                text: "Old snapshot",
+                turnId: null,
+                streaming: false,
+                createdAt: "2026-03-27T10:00:00Z",
+                updatedAt: "2026-03-27T10:00:00Z",
+              },
+            ],
+          },
+        ],
+      };
+      const ws = createMockWs(snapshotData);
       const events = new EventBuffer();
       const app = createRoutes({ ws, events });
 
@@ -498,15 +541,8 @@ describe("routes", () => {
     });
 
     it("handles snapshot failure gracefully", async () => {
-      const ws = createMockWs();
-      (ws.request as ReturnType<typeof mock>).mockImplementation(
-        (tag: string) => {
-          if (tag === "orchestration.getSnapshot") {
-            return Promise.reject(new Error("Connection lost"));
-          }
-          return Promise.resolve({});
-        },
-      );
+      // Pass null to simulate no snapshot available (timeout/error).
+      const ws = createMockWs(null);
       const events = new EventBuffer();
       const app = createRoutes({ ws, events });
 
@@ -518,11 +554,8 @@ describe("routes", () => {
 
   describe("GET /snapshot", () => {
     it("returns raw snapshot from ws", async () => {
-      const ws = createMockWs();
       const snapshotData = { snapshotSequence: 42, threads: [] };
-      (ws.request as ReturnType<typeof mock>).mockImplementation(() =>
-        Promise.resolve(snapshotData),
-      );
+      const ws = createMockWs(snapshotData);
       const events = new EventBuffer();
       const app = createRoutes({ ws, events });
 
@@ -673,7 +706,7 @@ describe("routes", () => {
       });
 
       const [, params] = (ws.request as ReturnType<typeof mock>).mock.calls[0];
-      expect(params.command.modelSelection).toEqual({
+      expect(params.modelSelection).toEqual({
         provider: "codex",
         model: "gpt-5.4",
         options: { reasoningEffort: "high" },
@@ -689,11 +722,11 @@ describe("routes", () => {
       });
 
       const [, params] = (ws.request as ReturnType<typeof mock>).mock.calls[0];
-      expect(params.command.modelSelection).toEqual({
+      expect(params.modelSelection).toEqual({
         provider: "codex",
         model: "gpt-5.4",
       });
-      expect(params.command.modelSelection.options).toBeUndefined();
+      expect(params.modelSelection.options).toBeUndefined();
     });
   });
 
@@ -712,7 +745,7 @@ describe("routes", () => {
       });
 
       const [, params] = (ws.request as ReturnType<typeof mock>).mock.calls[0];
-      expect(params.command.modelSelection).toEqual({
+      expect(params.modelSelection).toEqual({
         provider: "claudeAgent",
         model: "claude-opus-4-6",
         options: { thinking: true, effort: "high" },
@@ -728,7 +761,7 @@ describe("routes", () => {
       });
 
       const [, params] = (ws.request as ReturnType<typeof mock>).mock.calls[0];
-      expect(params.command.modelSelection).toBeUndefined();
+      expect(params.modelSelection).toBeUndefined();
     });
   });
 
@@ -801,7 +834,7 @@ describe("routes", () => {
 
       const res = await json(app, "/server/providers/refresh", { method: "POST" });
       expect(res.status).toBe(200);
-      expect(ws.request).toHaveBeenCalledWith("server.refreshProviders");
+      expect(ws.request).toHaveBeenCalledWith("server.refreshProviders", {});
     });
   });
 

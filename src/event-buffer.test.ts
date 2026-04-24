@@ -355,10 +355,10 @@ describe("EventBuffer", () => {
       expect(msgs[1].text).toBe("Hi there!");
 
       expect(buf.getThreadStatus("t1")).toBe("idle");
-      expect(buf.lastSequence).toBe(100);
+      expect(buf.lastSequence).toBeGreaterThanOrEqual(100);
     });
 
-    it("does not overwrite threads that already have live events", () => {
+    it("does not overwrite messages for threads that already have live events", () => {
       const buf = new EventBuffer();
       buf.push(
         makeMessageEvent("t1", "live-msg", {
@@ -391,6 +391,181 @@ describe("EventBuffer", () => {
       const msgs = buf.getMessages("t1");
       expect(msgs).toHaveLength(1);
       expect(msgs[0].text).toBe("Live message");
+    });
+
+    it("reconciles session status for threads already in buffer (stale status fix)", () => {
+      const buf = new EventBuffer();
+
+      // Thread exists with stale "running" status from before disconnect.
+      buf.push(
+        makeEvent("t1", "thread.session-set", {
+          session: { status: "running" },
+        }),
+      );
+      expect(buf.getThreadStatus("t1")).toBe("running");
+
+      // After reconnect, snapshot says the thread is actually "ready".
+      buf.hydrateFromSnapshot({
+        snapshotSequence: 100,
+        threads: [
+          {
+            id: "t1",
+            messages: [
+              {
+                id: "m1",
+                role: "user",
+                text: "Hello",
+                turnId: null,
+                streaming: false,
+                createdAt: "2026-03-27T12:00:00Z",
+                updatedAt: "2026-03-27T12:00:00Z",
+              },
+            ],
+            session: { status: "ready" },
+          },
+        ],
+      });
+
+      // Status MUST reflect the snapshot-corrected value.
+      expect(buf.getThreadStatus("t1")).toBe("ready");
+
+      // Messages must NOT be duplicated.
+      const msgs = buf.getMessages("t1");
+      expect(msgs).toHaveLength(0);
+    });
+
+    it("reconciles session status without corrupting newer live status", () => {
+      const buf = new EventBuffer();
+
+      // Thread exists with status from snapshot hydration.
+      buf.hydrateFromSnapshot({
+        snapshotSequence: 50,
+        threads: [
+          {
+            id: "t1",
+            messages: [],
+            session: { status: "idle" },
+          },
+        ],
+      });
+      expect(buf.getThreadStatus("t1")).toBe("idle");
+
+      // Live event arrives setting status to "running".
+      buf.push(
+        makeEvent("t1", "thread.session-set", {
+          session: { status: "running" },
+        }),
+      );
+      expect(buf.getThreadStatus("t1")).toBe("running");
+
+      // Second hydration (e.g. another reconnect) with snapshot still showing "running".
+      buf.hydrateFromSnapshot({
+        snapshotSequence: 200,
+        threads: [
+          {
+            id: "t1",
+            messages: [],
+            session: { status: "running" },
+          },
+        ],
+      });
+
+      // Should still be "running" — snapshot agrees with live state.
+      expect(buf.getThreadStatus("t1")).toBe("running");
+    });
+
+    it("does not append duplicate session events when snapshot status already matches", () => {
+      const buf = new EventBuffer();
+
+      buf.push(
+        makeEvent("t1", "thread.session-set", {
+          session: { status: "ready" },
+        }),
+      );
+      const before = buf.getEvents("t1", { types: ["thread.session-set"] }).length;
+
+      buf.hydrateFromSnapshot({
+        snapshotSequence: 100,
+        threads: [
+          {
+            id: "t1",
+            messages: [],
+            session: { status: "ready" },
+          },
+        ],
+      });
+
+      const after = buf.getEvents("t1", { types: ["thread.session-set"] });
+      expect(after).toHaveLength(before);
+      expect(buf.getThreadStatus("t1")).toBe("ready");
+    });
+
+    it("reconciles stopped status for thread stuck as running after reconnect", () => {
+      const buf = new EventBuffer();
+
+      // Simulate the exact bug scenario: thread was running, bridge disconnected,
+      // T3 Code finished the task (status → stopped), bridge reconnects.
+      buf.push(
+        makeEvent("t1", "thread.session-set", {
+          session: { status: "running" },
+        }),
+      );
+      buf.push(
+        makeMessageEvent("t1", "m1", {
+          role: "user",
+          text: "Do something",
+          streaming: false,
+        }),
+      );
+      buf.push(
+        makeMessageEvent("t1", "m2", {
+          role: "assistant",
+          text: "Working on it",
+          streaming: false,
+        }),
+      );
+
+      expect(buf.getThreadStatus("t1")).toBe("running");
+
+      // Reconnect: snapshot says thread is stopped.
+      buf.hydrateFromSnapshot({
+        snapshotSequence: 500,
+        threads: [
+          {
+            id: "t1",
+            messages: [
+              {
+                id: "m1",
+                role: "user",
+                text: "Do something",
+                turnId: null,
+                streaming: false,
+                createdAt: "2026-03-27T12:00:00Z",
+                updatedAt: "2026-03-27T12:00:00Z",
+              },
+              {
+                id: "m2",
+                role: "assistant",
+                text: "Working on it — done!",
+                turnId: "turn-1",
+                streaming: false,
+                createdAt: "2026-03-27T12:00:01Z",
+                updatedAt: "2026-03-27T12:00:10Z",
+              },
+            ],
+            session: { status: "stopped" },
+          },
+        ],
+      });
+
+      // Status MUST be corrected.
+      expect(buf.getThreadStatus("t1")).toBe("stopped");
+
+      // Messages from live events are preserved, snapshot messages NOT duplicated.
+      const msgs = buf.getMessages("t1");
+      expect(msgs).toHaveLength(2);
+      expect(msgs[0].text).toBe("Do something");
+      expect(msgs[1].text).toBe("Working on it");
     });
 
     it("hydrates multiple threads", () => {
