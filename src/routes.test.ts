@@ -434,12 +434,8 @@ describe("routes", () => {
       });
       expect(events.getThreadStatus("tid-stale")).toBe("running");
 
-      // Simulate reconnect: hydrate from snapshot (as onConnected would do).
-      events.hydrateFromSnapshot(
-        snapshotData as Parameters<typeof events.hydrateFromSnapshot>[0],
-      );
-
-      // GET /status must return the snapshot-corrected value.
+      // GET /status must actively reconcile from snapshot for already-buffered
+      // threads, because live WS events can miss the final session transition.
       const res = await json(app, "/threads/tid-stale/status");
       expect(res.status).toBe(200);
       expect(res.body.status).toBe("ready");

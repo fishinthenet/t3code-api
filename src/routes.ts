@@ -109,6 +109,29 @@ export function createRoutes({ ws, events, webhooks }: Deps) {
     }
   }
 
+  /**
+   * Reconcile one thread from the latest snapshot, even if it already exists
+   * in the buffer. This keeps /status authoritative when live session events
+   * miss a final transition but snapshot already reflects the final state.
+   */
+  async function reconcileThreadStatus(threadId: string) {
+    try {
+      const snapshot = await fetchSnapshot(ws);
+      if (!snapshot) return;
+
+      const threads = (snapshot.threads as Array<Record<string, unknown>> | undefined) ?? [];
+      const thread = threads.find((t) => t.id === threadId);
+      if (!thread) return;
+
+      events.hydrateFromSnapshot({
+        snapshotSequence: snapshot.snapshotSequence as number | undefined,
+        threads: [thread] as Parameters<typeof events.hydrateFromSnapshot>[0]["threads"],
+      });
+    } catch {
+      // Snapshot unavailable — keep buffered state.
+    }
+  }
+
   // ── Docs ──────────────────────────────────────────────────────────
 
   app.get("/docs", (c) => c.html(SWAGGER_UI_HTML));
@@ -319,6 +342,7 @@ export function createRoutes({ ws, events, webhooks }: Deps) {
     const { threadId } = c.req.param();
 
     await ensureHydrated(threadId);
+    await reconcileThreadStatus(threadId);
 
     const status = events.getThreadStatus(threadId);
     return c.json({ threadId, status });
